@@ -1,0 +1,21 @@
+[package]
+name = "runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wgpu = { version = "0.18", features = ["spirv"] }
+env_logger = "0.10"
+bytemuck = { version = "1.14", features = ["derive"] }
+pollster = { version = "0.3", features = ["macro"] }
+bevy_utils = "0.12"
+flume = "0.11"
+
+[build-dependencies]
+spirv-builder = "0.9"
+
+[profile.release.build-override]
+opt-level = 3
+codegen-units = 16
+[profile.dev.build-override]
+opt-level = 3
