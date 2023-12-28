@@ -1,46 +1,116 @@
 #![no_std]
 
+mod data;
+mod rand;
+mod ray;
+mod sphere;
+
+use data::{Face, Range};
+use rand::Rand;
+use ray::Ray;
+use sphere::Sphere;
 use spirv_std::{
-    glam::{UVec2, UVec3, Vec3},
+    glam::{UVec2, UVec3, Vec2, Vec3, Vec3Swizzles},
+    num_traits::Float,
     spirv,
 };
 
-#[derive(Clone, Copy)]
-struct Ray {
-    pub origin: Vec3,
-    pub direction: Vec3,
+#[derive(Clone, Default)]
+pub struct RayHit {
+    /// Whether or not this ray hit something
+    pub did_hit: bool,
+
+    /// Distance to hit
+    pub distance: f32,
+
+    /// The point where the ray hit
+    pub point: Vec3,
+
+    /// Which face
+    pub face: Face,
+
+    /// Normal, unit length
+    pub normal: Vec3,
+    // /// The material of the hit shape
+    // pub material: Material,
 }
 
-impl Ray {
-    pub fn at(self, distance: f32) -> Vec3 {
-        self.origin + (self.direction * distance)
+impl RayHit {
+    pub fn none() -> Self {
+        Default::default()
     }
 }
 
-struct Sphere {
-    pub center: Vec3,
-    pub radius: f32,
+#[derive(Clone, Copy)]
+struct Camera {
+    position: Vec3,
+    vertical_fov: f32,
+    focal_length: f32,
 }
 
-fn hit_sphere(sphere: Sphere, ray: Ray) -> bool {
-    let oc = ray.origin - sphere.center;
-    let a = Vec3::dot(ray.direction, ray.direction);
-    let b = 2. * Vec3::dot(oc, ray.direction);
-    let c = Vec3::dot(oc, oc) - sphere.radius * sphere.radius;
+struct Viewport {
+    horizontal_pixel_delta: Vec3,
+    vertical_pixel_delta: Vec3,
 
-    let discriminant = b * b - 4. * a * c;
-
-    discriminant >= 0.
+    upper_left_pixel_position: Vec3,
 }
 
-fn ray_color(ray: Ray) -> Vec3 {
-    let sphere = Sphere {
-        center: Vec3::new(0., 0., -1.),
-        radius: 0.5,
-    };
+fn calculate_viewport(camera: Camera, screen_size: UVec2) -> Viewport {
+    let aspect_ratio = (screen_size.x as f32) / (screen_size.y as f32);
 
-    if hit_sphere(sphere, ray) {
-        return Vec3::new(1., 0., 0.);
+    let height = 2.0;
+    let width = height * aspect_ratio;
+
+    let horizontal = Vec3::new(width, 0., 0.);
+    let vertical = Vec3::new(0., -height, 0.);
+
+    let horizontal_pixel_delta = horizontal / (screen_size.x as f32);
+    let vertical_pixel_delta = vertical / (screen_size.y as f32);
+
+    let upper_left_corner =
+        camera.position - Vec3::new(0., 0., camera.focal_length) - horizontal / 2. - vertical / 2.;
+
+    let upper_left_pixel_position =
+        upper_left_corner + horizontal_pixel_delta / 2. + vertical_pixel_delta / 2.;
+
+    Viewport {
+        horizontal_pixel_delta,
+        vertical_pixel_delta,
+        upper_left_pixel_position,
+    }
+}
+
+fn raytrace_spheres<const N: usize>(spheres: [Sphere; N], ray: Ray, range: Range<f32>) -> RayHit {
+    let mut closest_hit = RayHit::none();
+    let mut closest_distance = range.end;
+
+    for i in 0..N {
+        let ray_hit = spheres[i].raytrace(
+            ray,
+            Range {
+                start: range.start,
+                end: closest_distance,
+            },
+        );
+
+        if ray_hit.did_hit {
+            closest_distance = ray_hit.distance;
+            closest_hit = ray_hit;
+        }
+    }
+
+    closest_hit
+}
+
+fn ray_color<const N: usize>(ray: Ray, spheres: [Sphere; N]) -> Vec3 {
+    let ray_hit = raytrace_spheres(spheres, ray, Range::new(0., Float::max_value()));
+
+    if ray_hit.did_hit {
+        return (ray_hit.normal + Vec3::ONE) / 2.;
+        // let normal = ray.at(ray_hit.distance) - Vec3::new(0., 0., -1.);
+        // let normal = normal.normalize();
+        //
+        // return (normal + Vec3::ONE) / 2.;
     }
 
     let unit_direction = ray.direction.normalize();
@@ -48,48 +118,50 @@ fn ray_color(ray: Ray) -> Vec3 {
     return Vec3::splat(1. - a) + a * Vec3::new(0.5, 0.7, 1.);
 }
 
+fn pixel_sample_offset(rand: &mut Rand) -> Vec2 {
+    rand.gen_vec2() - (Vec2::ONE / 2.) // From -0.5 to 0.5
+}
+
 #[spirv(compute(threads(1)))]
 pub fn main(
     #[spirv(global_invocation_id)] pixel_position: UVec3,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] _input: &mut [f32],
-    #[spirv(uniform, descriptor_set = 0, binding = 1)] screen_size: &UVec2,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] output: &mut [Vec3],
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] &screen_size: &UVec2,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] output: &mut [Vec3],
 ) {
-    let vertical_fov: f32 = 30.;
-    let camera_position = Vec3::new(0., 0., 0.);
+    let spheres = [
+        Sphere {
+            center: Vec3::new(0., 0., -1.),
+            radius: 0.5,
+        },
+        Sphere {
+            center: Vec3::new(0., -100.5, -1.),
+            radius: 100.,
+        },
+    ];
 
-    let aspect_ratio = (screen_size.x as f32) / (screen_size.y as f32);
-    let theta = vertical_fov.to_radians();
+    let camera = Camera {
+        position: Vec3::new(0., 0., 0.),
+        vertical_fov: 30_f32.to_radians(),
+        focal_length: 1.,
+    };
 
-    let h = theta * 2.;
-    let viewport_height = 2. * h;
-    let viewport_width = viewport_height * aspect_ratio;
-    let focal_length = 1.;
+    let viewport = calculate_viewport(camera, screen_size);
 
-    let horizontal_viewport = Vec3::new(viewport_width, 0., 0.);
-    let vertical_viewport = Vec3::new(0., -viewport_height, 0.);
-    let horizontal_pixel_delta = horizontal_viewport / (screen_size.x as f32);
-    let vertical_pixel_delta = vertical_viewport / (screen_size.y as f32);
+    let mut rand = Rand::from(pixel_position);
+    let sample_position = pixel_position.xy().as_vec2() + pixel_sample_offset(&mut rand);
 
-    let upper_left_corner = camera_position
-        - Vec3::new(0., 0., focal_length)
-        - horizontal_viewport / 2.
-        - vertical_viewport / 2.;
+    let pixel_center = viewport.upper_left_pixel_position
+        + sample_position.x * viewport.horizontal_pixel_delta
+        + sample_position.y * viewport.vertical_pixel_delta;
 
-    let first_pixel = upper_left_corner + horizontal_pixel_delta / 2. + vertical_pixel_delta / 2.;
-
-    let pixel_center = first_pixel
-        + (pixel_position.x as f32) * horizontal_pixel_delta
-        + (pixel_position.y as f32) * vertical_pixel_delta;
-
-    let ray_direction = pixel_center - camera_position;
+    let ray_direction = pixel_center - camera.position;
 
     let ray = Ray {
-        origin: camera_position,
+        origin: camera.position,
         direction: ray_direction,
     };
 
-    let color = ray_color(ray);
+    let color = ray_color(ray, spheres);
 
-    output[(pixel_position.y * screen_size.x + pixel_position.x) as usize] = color;
+    output[(pixel_position.y * screen_size.x + pixel_position.x) as usize] += color;
 }

@@ -7,7 +7,7 @@ use wgpu::{
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingType, BufferBindingType, BufferDescriptor, BufferUsages, ComputePipelineDescriptor,
     DeviceDescriptor, Features, Instance, InstanceDescriptor, Maintain, PipelineLayoutDescriptor,
-    ShaderStages, TextureDescriptor,
+    ShaderStages,
 };
 
 #[pollster::main]
@@ -15,6 +15,8 @@ async fn main() {
     env_logger::init();
 
     let shader = include_spirv!(env!("shader.spv"));
+    let screen_size: [u32; 2] = [800, 400];
+    let amount_of_samples = 100;
 
     // Setup
     let instance = Instance::new(InstanceDescriptor {
@@ -42,32 +44,11 @@ async fn main() {
     let compute_shader_module = device.create_shader_module(shader);
 
     // Data
-    let input = &[1.0f32, 2.0f32];
-
-    let input_buffer = device.create_buffer_init(&BufferInitDescriptor {
-        label: Some("Input buffer"),
-        contents: bytemuck::bytes_of(input),
-        usage: BufferUsages::STORAGE | BufferUsages::MAP_READ,
-    });
-
-    let screen_size: [u32; 2] = [800, 400];
-
     let screen_size_buffer = device.create_buffer_init(&BufferInitDescriptor {
         label: Some("Screen size buffer"),
         contents: bytemuck::bytes_of(&screen_size),
         usage: BufferUsages::UNIFORM,
     });
-
-    // let output_texture = device.create_texture(&TextureDescriptor {
-    //     label: Some("Output texture"),
-    //     size: (),
-    //     mip_level_count: (),
-    //     sample_count: (),
-    //     dimension: (),
-    //     format: (),
-    //     usage: (),
-    //     view_formats: (),
-    // });
 
     let output_buffer = device.create_buffer(&BufferDescriptor {
         label: Some("Output buffer"),
@@ -83,16 +64,6 @@ async fn main() {
                 binding: 0,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: None,
@@ -100,7 +71,7 @@ async fn main() {
                 count: None,
             },
             BindGroupLayoutEntry {
-                binding: 2,
+                binding: 1,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
@@ -131,14 +102,10 @@ async fn main() {
         entries: &[
             BindGroupEntry {
                 binding: 0,
-                resource: input_buffer.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 1,
                 resource: screen_size_buffer.as_entire_binding(),
             },
             BindGroupEntry {
-                binding: 2,
+                binding: 1,
                 resource: output_buffer.as_entire_binding(),
             },
         ],
@@ -150,7 +117,7 @@ async fn main() {
         let mut compute_pass = encoder.begin_compute_pass(&default());
         compute_pass.set_pipeline(&compute_pipeline);
         compute_pass.set_bind_group(0, &bind_group, &[]);
-        compute_pass.dispatch_workgroups(screen_size[0], screen_size[1], 1);
+        compute_pass.dispatch_workgroups(screen_size[0], screen_size[1], amount_of_samples);
     }
 
     queue.submit([encoder.finish()]);
@@ -171,13 +138,14 @@ async fn main() {
 
     let buffer_view = buffer_slice.get_mapped_range();
     let output_data: &[[f32; 4]] = bytemuck::cast_slice(&*buffer_view);
-    // dbg!(output_data);
 
     // Export to ppm
     let mut output_ppm = String::new();
     output_ppm += &format!("P3\n{} {}\n255\n", screen_size[0], screen_size[1]);
 
     for pixel in output_data {
+        let pixel = pixel.map(|c| c / (amount_of_samples as f32));
+        // let pixel = pixel.map(|c| c.sqrt()); // map from linear to gamma 2
         let pixel = pixel.map(|c| f32::round(c * 255.) as u8);
 
         output_ppm += &format!("{} {} {}\n", pixel[0], pixel[1], pixel[2]);
