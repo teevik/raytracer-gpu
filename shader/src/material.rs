@@ -6,6 +6,7 @@ use crate::{
     data::{Face, RayHit, ScatterResult},
     rand::Rand,
     ray::Ray,
+    F,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -24,13 +25,13 @@ unsafe impl Pod for Reflection {}
 #[repr(C)]
 pub struct Material {
     pub reflection: Reflection,
-    pub albedo: Vec3<f32>,
-    pub fuzz: f32,
-    pub refraction_index: f32,
+    pub albedo: Vec3<F>,
+    pub fuzz: F,
+    pub refraction_index: F,
 }
 
 impl Material {
-    pub fn diffuse(albedo: Vec3<f32>) -> Self {
+    pub fn diffuse(albedo: Vec3<F>) -> Self {
         Self {
             reflection: Reflection::Diffuse,
             albedo,
@@ -38,7 +39,7 @@ impl Material {
         }
     }
 
-    pub fn metal(albedo: Vec3<f32>, fuzz: f32) -> Self {
+    pub fn metal(albedo: Vec3<F>, fuzz: F) -> Self {
         Self {
             reflection: Reflection::Metal,
             albedo,
@@ -47,7 +48,7 @@ impl Material {
         }
     }
 
-    pub fn glass(refraction_index: f32) -> Self {
+    pub fn glass(refraction_index: F) -> Self {
         Self {
             reflection: Reflection::Glass,
             refraction_index,
@@ -59,22 +60,22 @@ impl Material {
         match self.reflection {
             Reflection::Diffuse => scatter_diffuse(self.albedo.into(), ray_hit, rand),
             Reflection::Metal => scatter_metal(self.albedo.into(), self.fuzz, ray, ray_hit, rand),
-            Reflection::Glass => scatter_glass(self.refraction_index.into(), ray, ray_hit, rand),
+            Reflection::Glass => scatter_glass(self.refraction_index, ray, ray_hit, rand),
         }
     }
 }
 
-fn is_near_zero(value: Vec3<f32>) -> bool {
-    const S: f32 = 1e-8;
+fn is_near_zero(value: Vec3<F>) -> bool {
+    const S: F = 1e-8;
 
     value.x < S && value.y < S && value.z < S
 }
 
-fn reflect(value: Vec3<f32>, normal: Vec3<f32>) -> Vec3<f32> {
+fn reflect(value: Vec3<F>, normal: Vec3<F>) -> Vec3<F> {
     value - (2. * Vec3::dot(value, normal) * normal)
 }
 
-fn refract(value: Vec3<f32>, normal: Vec3<f32>, etai_over_etat: f32) -> Vec3<f32> {
+fn refract(value: Vec3<F>, normal: Vec3<F>, etai_over_etat: F) -> Vec3<F> {
     let cos_theta = Float::min(Vec3::dot(-value, normal), 1.);
 
     let r_out_perp = etai_over_etat * (value + (cos_theta * normal));
@@ -83,14 +84,14 @@ fn refract(value: Vec3<f32>, normal: Vec3<f32>, etai_over_etat: f32) -> Vec3<f32
     r_out_perp + r_out_parallel
 }
 
-fn reflectance(cosine: f32, refraction_ratio: f32) -> f32 {
+fn reflectance(cosine: F, refraction_ratio: F) -> F {
     let r0 = (1. - refraction_ratio) / (1. + refraction_ratio);
     let r0 = r0 * r0;
 
     r0 + (1. - r0) * Float::powi(1. - cosine, 5)
 }
 
-fn scatter_diffuse(albedo: Vec3<f32>, ray_hit: RayHit, rand: &mut Rand) -> ScatterResult {
+fn scatter_diffuse(albedo: Vec3<F>, ray_hit: RayHit, rand: &mut Rand) -> ScatterResult {
     let mut scatter_direction = ray_hit.normal + rand.gen_unit_vector();
 
     // Catch degenerate scatter direction
@@ -112,8 +113,8 @@ fn scatter_diffuse(albedo: Vec3<f32>, ray_hit: RayHit, rand: &mut Rand) -> Scatt
 }
 
 pub fn scatter_metal(
-    albedo: Vec3<f32>,
-    fuzz: f32,
+    albedo: Vec3<F>,
+    fuzz: F,
     ray: Ray,
     ray_hit: RayHit,
     rand: &mut Rand,
@@ -138,11 +139,12 @@ pub fn scatter_metal(
 }
 
 pub fn scatter_glass(
-    refraction_index: f32,
+    refraction_index: F,
     ray: Ray,
     ray_hit: RayHit,
     rand: &mut Rand,
 ) -> ScatterResult {
+    let refraction_index = 1.5;
     let refraction_ratio = match ray_hit.face {
         Face::Front => 1. / refraction_index,
         Face::Back => refraction_index,

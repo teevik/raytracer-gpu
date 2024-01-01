@@ -32,7 +32,7 @@ async fn main() {
     };
 
     let screen_size = Vec2::new(800, 400);
-    let amount_of_samples = 10;
+    let amount_of_samples = 5;
     let max_depth = 50;
 
     let raytrace_settings = RaytraceSettings {

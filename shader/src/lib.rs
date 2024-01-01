@@ -16,16 +16,18 @@ pub use material::{Material, Reflection};
 pub use sphere::Sphere;
 use vek::{Vec2, Vec3};
 
+pub type F = f32;
+
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct Camera {
-    pub position: Vec3<f32>,
-    pub target: Vec3<f32>,
-    pub up: Vec3<f32>,
+    pub position: Vec3<F>,
+    pub target: Vec3<F>,
+    pub up: Vec3<F>,
 
-    pub vertical_fov: f32,
-    pub defocus_angle: f32,
-    pub focus_distance: f32,
+    pub vertical_fov: F,
+    pub defocus_angle: F,
+    pub focus_distance: F,
 }
 
 #[derive(Clone, Copy, Zeroable, Pod)]
@@ -38,17 +40,17 @@ pub struct RaytraceSettings {
 }
 
 struct Viewport {
-    upper_left_pixel_position: Vec3<f32>,
+    upper_left_pixel_position: Vec3<F>,
 
-    horizontal_pixel_delta: Vec3<f32>,
-    vertical_pixel_delta: Vec3<f32>,
+    horizontal_pixel_delta: Vec3<F>,
+    vertical_pixel_delta: Vec3<F>,
 
-    horizontal_defocus_disk: Vec3<f32>,
-    vertical_defocus_disk: Vec3<f32>,
+    horizontal_defocus_disk: Vec3<F>,
+    vertical_defocus_disk: Vec3<F>,
 }
 
 fn calculate_viewport(camera: Camera, screen_size: Vec2<u32>) -> Viewport {
-    let aspect_ratio = (screen_size.x as f32) / (screen_size.y as f32);
+    let aspect_ratio = (screen_size.x as F) / (screen_size.y as F);
 
     let h = Float::tan(camera.vertical_fov / 2.);
     let height = 2.0 * h * camera.focus_distance;
@@ -61,8 +63,8 @@ fn calculate_viewport(camera: Camera, screen_size: Vec2<u32>) -> Viewport {
     let horizontal = width * u;
     let vertical = -height * v;
 
-    let horizontal_pixel_delta = horizontal / (screen_size.x as f32);
-    let vertical_pixel_delta = vertical / (screen_size.y as f32);
+    let horizontal_pixel_delta = horizontal / (screen_size.x as F);
+    let vertical_pixel_delta = vertical / (screen_size.y as F);
 
     let upper_left_corner =
         camera.position - (camera.focus_distance * w) - horizontal / 2. - vertical / 2.;
@@ -85,7 +87,7 @@ fn calculate_viewport(camera: Camera, screen_size: Vec2<u32>) -> Viewport {
     }
 }
 
-fn raytrace_spheres(spheres: &[Sphere], ray: Ray, range: Range<f32>) -> RayHit {
+fn raytrace_spheres(spheres: &[Sphere], ray: Ray, range: Range<F>) -> RayHit {
     let mut closest_hit = RayHit::none();
     let mut closest_distance = range.end;
 
@@ -107,7 +109,7 @@ fn raytrace_spheres(spheres: &[Sphere], ray: Ray, range: Range<f32>) -> RayHit {
     closest_hit
 }
 
-fn ray_color(ray: Ray, spheres: &[Sphere], max_depth: u32, rand: &mut Rand) -> Vec3<f32> {
+fn ray_color(ray: Ray, spheres: &[Sphere], max_depth: u32, rand: &mut Rand) -> Vec3<F> {
     let mut accumulated_color = Vec3::one();
     let mut next_ray = ray;
 
@@ -140,11 +142,11 @@ fn ray_color(ray: Ray, spheres: &[Sphere], max_depth: u32, rand: &mut Rand) -> V
     Vec3::zero()
 }
 
-fn pixel_sample_offset(rand: &mut Rand) -> Vec2<f32> {
+fn pixel_sample_offset(rand: &mut Rand) -> Vec2<F> {
     rand.gen_vec2() - (Vec2::one() / 2.) // From -0.5 to 0.5
 }
 
-fn defocus_sample_offset(rand: &mut Rand) -> Vec2<f32> {
+fn defocus_sample_offset(rand: &mut Rand) -> Vec2<F> {
     rand.gen_in_unit_disk()
 }
 
@@ -154,7 +156,7 @@ pub fn main(
     #[spirv(uniform, descriptor_set = 0, binding = 0)] &seed: &u32,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] &raytrace_settings: &RaytraceSettings,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] spheres: &[Sphere],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] output: &mut [Vec3<f32>],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] output: &mut [Vec3<F>],
 ) {
     let pixel_position = Vec2::new(pixel_position.x, pixel_position.y);
 
@@ -168,7 +170,7 @@ pub fn main(
     let viewport = calculate_viewport(camera, screen_size);
 
     let mut rand = Rand::from(pixel_position.with_z(seed));
-    let sample_position = pixel_position.as_::<f32>() + pixel_sample_offset(&mut rand);
+    let sample_position = pixel_position.as_::<F>() + pixel_sample_offset(&mut rand);
 
     let pixel_center = viewport.upper_left_pixel_position
         + sample_position.x * viewport.horizontal_pixel_delta
@@ -189,5 +191,5 @@ pub fn main(
     let color = ray_color(ray, spheres, max_depth, &mut rand);
 
     output[(pixel_position.y * screen_size.x + pixel_position.x) as usize] +=
-        color / (amount_of_samples as f32);
+        color / (amount_of_samples as F);
 }

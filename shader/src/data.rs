@@ -1,6 +1,6 @@
 use vek::Vec3;
 
-use crate::{material::Material, ray::Ray};
+use crate::{material::Material, ray::Ray, F};
 
 #[derive(Clone, Copy)]
 pub struct Range<T: Copy> {
@@ -31,16 +31,16 @@ pub struct RayHit {
     pub did_hit: bool,
 
     /// Distance to hit
-    pub distance: f32,
+    pub distance: F,
 
     /// The point where the ray hit
-    pub point: Vec3<f32>,
+    pub point: Vec3<F>,
 
     /// Which face
     pub face: Face,
 
     /// Normal, unit length
-    pub normal: Vec3<f32>,
+    pub normal: Vec3<F>,
 
     /// The material of the hit shape
     pub material: Material,
@@ -61,7 +61,7 @@ pub struct ScatterResult {
     pub scattered: Ray,
 
     /// The color produced from scattering
-    pub attenuation: Vec3<f32>,
+    pub attenuation: Vec3<F>,
 }
 
 impl ScatterResult {

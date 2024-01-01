@@ -1,19 +1,19 @@
 use vek::Vec3;
 
-use crate::data::Face;
+use crate::{data::Face, F};
 
 #[derive(Clone, Copy, Default)]
 pub struct Ray {
-    pub origin: Vec3<f32>,
-    pub direction: Vec3<f32>,
+    pub origin: Vec3<F>,
+    pub direction: Vec3<F>,
 }
 
 impl Ray {
-    pub fn at(self, distance: f32) -> Vec3<f32> {
+    pub fn at(self, distance: F) -> Vec3<F> {
         self.origin + (self.direction * distance)
     }
 
-    pub fn get_face(self, outward_normal: Vec3<f32>) -> Face {
+    pub fn get_face(self, outward_normal: Vec3<F>) -> Face {
         let direction = Vec3::dot(self.direction, outward_normal);
 
         if direction < 0. {

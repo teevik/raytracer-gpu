@@ -1,6 +1,6 @@
 use vek::{Vec2, Vec3};
 
-use crate::data::Range;
+use crate::{data::Range, F};
 
 pub fn hash1(mut x: u32) -> u32 {
     x += x << 10;
@@ -53,24 +53,24 @@ impl Rand {
         next
     }
 
-    pub fn gen_float(&mut self) -> f32 {
+    pub fn gen_float(&mut self) -> F {
         let rand = self.gen();
 
         // (rand as f32) / (u32::MAX as f32)
-        uint_to_u01_float(rand)
+        uint_to_u01_float(rand) as F
     }
 
-    pub fn gen_range(&mut self, range: Range<f32>) -> f32 {
+    pub fn gen_range(&mut self, range: Range<F>) -> F {
         let rand = self.gen_float();
 
         range.start + (rand * (range.end - range.start))
     }
 
-    pub fn gen_vec2(&mut self) -> Vec2<f32> {
+    pub fn gen_vec2(&mut self) -> Vec2<F> {
         Vec2::new(self.gen_float(), self.gen_float())
     }
 
-    pub fn gen_in_unit_sphere(&mut self) -> Vec3<f32> {
+    pub fn gen_in_unit_sphere(&mut self) -> Vec3<F> {
         let mut random = || {
             self.gen_range(Range {
                 start: -1.,
@@ -87,11 +87,11 @@ impl Rand {
         }
     }
 
-    pub fn gen_unit_vector(&mut self) -> Vec3<f32> {
+    pub fn gen_unit_vector(&mut self) -> Vec3<F> {
         self.gen_in_unit_sphere().normalized()
     }
 
-    pub fn gen_on_hemisphere(&mut self, normal: Vec3<f32>) -> Vec3<f32> {
+    pub fn gen_on_hemisphere(&mut self, normal: Vec3<F>) -> Vec3<F> {
         let on_unit_sphere = self.gen_unit_vector();
 
         if on_unit_sphere.dot(normal) > 0. {
@@ -101,7 +101,7 @@ impl Rand {
         }
     }
 
-    pub fn gen_in_unit_disk(&mut self) -> Vec2<f32> {
+    pub fn gen_in_unit_disk(&mut self) -> Vec2<F> {
         let mut random = || self.gen_range(Range::new(-1., 1.));
 
         loop {
