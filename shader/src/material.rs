@@ -1,5 +1,6 @@
 use bytemuck::{Pod, Zeroable};
-use spirv_std::{glam::Vec3, num_traits::Float};
+use spirv_std::num_traits::Float;
+use vek::Vec3;
 
 use crate::{
     data::{Face, RayHit, ScatterResult},
@@ -23,13 +24,13 @@ unsafe impl Pod for Reflection {}
 #[repr(C)]
 pub struct Material {
     pub reflection: Reflection,
-    pub albedo: [f32; 3],
+    pub albedo: Vec3<f32>,
     pub fuzz: f32,
     pub refraction_index: f32,
 }
 
 impl Material {
-    pub fn diffuse(albedo: [f32; 3]) -> Self {
+    pub fn diffuse(albedo: Vec3<f32>) -> Self {
         Self {
             reflection: Reflection::Diffuse,
             albedo,
@@ -37,7 +38,7 @@ impl Material {
         }
     }
 
-    pub fn metal(albedo: [f32; 3], fuzz: f32) -> Self {
+    pub fn metal(albedo: Vec3<f32>, fuzz: f32) -> Self {
         Self {
             reflection: Reflection::Metal,
             albedo,
@@ -63,21 +64,21 @@ impl Material {
     }
 }
 
-fn is_near_zero(value: Vec3) -> bool {
+fn is_near_zero(value: Vec3<f32>) -> bool {
     const S: f32 = 1e-8;
 
     value.x < S && value.y < S && value.z < S
 }
 
-fn reflect(value: Vec3, normal: Vec3) -> Vec3 {
+fn reflect(value: Vec3<f32>, normal: Vec3<f32>) -> Vec3<f32> {
     value - (2. * Vec3::dot(value, normal) * normal)
 }
 
-fn refract(value: Vec3, normal: Vec3, etai_over_etat: f32) -> Vec3 {
+fn refract(value: Vec3<f32>, normal: Vec3<f32>, etai_over_etat: f32) -> Vec3<f32> {
     let cos_theta = Float::min(Vec3::dot(-value, normal), 1.);
 
     let r_out_perp = etai_over_etat * (value + (cos_theta * normal));
-    let r_out_parallel = -Float::sqrt(Float::abs(1. - r_out_perp.length_squared())) * normal;
+    let r_out_parallel = -Float::sqrt(Float::abs(1. - r_out_perp.magnitude_squared())) * normal;
 
     r_out_perp + r_out_parallel
 }
@@ -89,7 +90,7 @@ fn reflectance(cosine: f32, refraction_ratio: f32) -> f32 {
     r0 + (1. - r0) * Float::powi(1. - cosine, 5)
 }
 
-fn scatter_diffuse(albedo: Vec3, ray_hit: RayHit, rand: &mut Rand) -> ScatterResult {
+fn scatter_diffuse(albedo: Vec3<f32>, ray_hit: RayHit, rand: &mut Rand) -> ScatterResult {
     let mut scatter_direction = ray_hit.normal + rand.gen_unit_vector();
 
     // Catch degenerate scatter direction
@@ -111,13 +112,13 @@ fn scatter_diffuse(albedo: Vec3, ray_hit: RayHit, rand: &mut Rand) -> ScatterRes
 }
 
 pub fn scatter_metal(
-    albedo: Vec3,
+    albedo: Vec3<f32>,
     fuzz: f32,
     ray: Ray,
     ray_hit: RayHit,
     rand: &mut Rand,
 ) -> ScatterResult {
-    let reflected = reflect(ray.direction.normalize(), ray_hit.normal);
+    let reflected = reflect(ray.direction.normalized(), ray_hit.normal);
 
     let scattered = Ray {
         origin: ray_hit.point,
@@ -147,7 +148,7 @@ pub fn scatter_glass(
         Face::Back => refraction_index,
     };
 
-    let unit_direction = ray.direction.normalize();
+    let unit_direction = ray.direction.normalized();
     let cos_theta = Float::min(Vec3::dot(-unit_direction, ray_hit.normal), 1.);
     let sin_theta = Float::sqrt(1. - cos_theta * cos_theta);
 
@@ -164,7 +165,7 @@ pub fn scatter_glass(
         origin: ray_hit.point,
         direction,
     };
-    let attenuation = Vec3::ONE;
+    let attenuation = Vec3::one();
 
     ScatterResult {
         did_scatter: true,

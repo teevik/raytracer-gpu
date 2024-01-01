@@ -8,4 +8,6 @@ crate-type = ["dylib", "rlib"]
 
 [dependencies]
 bytemuck.workspace = true
+vek.workspace = true
+
 spirv-std = "0.9"

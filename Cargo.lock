@@ -1239,6 +1239,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "spirv-std",
+ "vek",
 ]
 
 [[package]]
@@ -1479,10 +1480,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c85158043f3bc1fac596d59a77e07948da340b9951b451ed4cb4a8c480aa2157"
 dependencies = [
  "approx",
+ "bytemuck",
  "num-integer",
  "num-traits",
  "rustc_version",
- "serde",
 ]
 
 [[package]]

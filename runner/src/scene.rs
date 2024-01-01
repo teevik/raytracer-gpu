@@ -7,30 +7,30 @@ pub fn scene() -> Vec<Sphere> {
 
     // Ground
     spheres.push(Sphere {
-        center: [0., -1000., 0.],
+        center: Vec3::new(0., -1000., 0.),
         radius: 1000.,
-        material: Material::diffuse([0.5, 0.5, 0.5]),
+        material: Material::diffuse(Vec3::new(0.5, 0.5, 0.5)),
     });
 
     // Center sphere
     spheres.push(Sphere {
-        center: [0., 1., 0.],
+        center: Vec3::new(0., 1., 0.),
         radius: 1.,
         material: Material::glass(1.5),
     });
 
     // Left sphere
     spheres.push(Sphere {
-        center: [-4., 1., 0.],
+        center: Vec3::new(-4., 1., 0.),
         radius: 1.,
-        material: Material::diffuse([0.4, 0.2, 0.1]),
+        material: Material::diffuse(Vec3::new(0.4, 0.2, 0.1)),
     });
 
     // Right sphere
     spheres.push(Sphere {
-        center: [4., 1., 0.],
+        center: Vec3::new(4., 1., 0.),
         radius: 1.,
-        material: Material::metal([0.7, 0.6, 0.5], 0.),
+        material: Material::metal(Vec3::new(0.7, 0.6, 0.5), 0.),
     });
 
     let rng = &mut thread_rng();
@@ -46,17 +46,15 @@ pub fn scene() -> Vec<Sphere> {
             );
 
             if center.distance(Vec3::new(4., 0.2, 0.)) > 0.9 {
-                let center = center.into_array();
-
                 if choose_material < 0.8 {
                     // Diffuse
 
                     let mut random = || rng.gen::<f32>();
-                    let albedo = [
+                    let albedo = Vec3::new(
                         random() * random(),
                         random() * random(),
                         random() * random(),
-                    ];
+                    );
 
                     spheres.push(Sphere {
                         center,
@@ -66,7 +64,7 @@ pub fn scene() -> Vec<Sphere> {
                 } else if choose_material < 0.95 {
                     // Metal
                     let mut random = || rng.gen_range(0.5..1.);
-                    let albedo = [random(), random(), random()];
+                    let albedo = Vec3::new(random(), random(), random());
                     let fuzz = rng.gen_range(0. ..0.5);
 
                     spheres.push(Sphere {

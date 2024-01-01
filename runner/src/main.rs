@@ -1,9 +1,9 @@
 mod scene;
 
-use std::fs;
-
 use bevy_utils::default;
 use scene::scene;
+use std::{fs, mem::size_of};
+use vek::{Vec2, Vec3};
 use wgpu::{
     include_spirv,
     util::{BufferInitDescriptor, DeviceExt},
@@ -18,8 +18,8 @@ async fn main() {
     env_logger::init();
 
     let shader = include_spirv!(env!("shader.spv"));
-    let screen_size: [u32; 2] = [800, 400];
-    let amount_of_samples = 5;
+    let screen_size: Vec2<u32> = Vec2::new(800, 400);
+    let amount_of_samples = 1;
     let max_depth: u32 = 400;
     let spheres = scene();
 
@@ -69,7 +69,7 @@ async fn main() {
 
     let output_buffer = device.create_buffer(&BufferDescriptor {
         label: Some("Output buffer"),
-        size: ((screen_size[0] * screen_size[1]) as u64) * 4 * 4,
+        size: (screen_size[0] * screen_size[1]) as u64 * (size_of::<Vec3<f32>>() as u64),
         mapped_at_creation: false,
         usage: BufferUsages::STORAGE | BufferUsages::MAP_READ,
     });
@@ -182,7 +182,7 @@ async fn main() {
         .expect("Buffer map error");
 
     let buffer_view = buffer_slice.get_mapped_range();
-    let output_data: &[[f32; 4]] = bytemuck::cast_slice(&*buffer_view);
+    let output_data: &[Vec3<f32>] = bytemuck::cast_slice(&*buffer_view);
 
     // Export to ppm
     let mut output_ppm = String::new();

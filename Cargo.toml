@@ -7,3 +7,4 @@ members = [
 
 [workspace.dependencies]
 bytemuck = { version = "1.14", features = ["derive"] }
+vek = { version = "0.16", default-features = false, features = ["rgb", "bytemuck", "libm"] }

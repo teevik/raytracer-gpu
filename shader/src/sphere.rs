@@ -1,5 +1,6 @@
 use bytemuck::{Pod, Zeroable};
-use spirv_std::{glam::Vec3, num_traits::Float};
+use spirv_std::num_traits::Float;
+use vek::Vec3;
 
 use crate::{
     data::{Face, Range},
@@ -11,7 +12,7 @@ use crate::{
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct Sphere {
-    pub center: [f32; 3],
+    pub center: Vec3<f32>,
     pub radius: f32,
     pub material: Material,
 }
@@ -19,9 +20,9 @@ pub struct Sphere {
 impl Sphere {
     pub fn raytrace(self, ray: Ray, range: Range<f32>) -> RayHit {
         let center_to_origin = ray.origin - Vec3::from(self.center);
-        let a = ray.direction.length_squared();
+        let a = ray.direction.magnitude_squared();
         let half_b = Vec3::dot(center_to_origin, ray.direction);
-        let c = center_to_origin.length_squared() - (self.radius * self.radius);
+        let c = center_to_origin.magnitude_squared() - (self.radius * self.radius);
 
         let discriminant = (half_b * half_b) - (a * c);
         if discriminant < 0. {

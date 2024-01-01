@@ -1,4 +1,4 @@
-use spirv_std::glam::{UVec2, UVec3, Vec2, Vec3, Vec3Swizzles};
+use vek::{Vec2, Vec3};
 
 use crate::data::Range;
 
@@ -23,12 +23,12 @@ pub fn hash_combine2(x: u32, y: u32) -> u32 {
     seed
 }
 
-pub fn hash2(v: UVec2) -> u32 {
+pub fn hash2(v: Vec2<u32>) -> u32 {
     hash_combine2(v.x, hash1(v.y))
 }
 
-pub fn hash3(v: UVec3) -> u32 {
-    hash_combine2(v.x, hash2(v.yz()))
+pub fn hash3(v: Vec3<u32>) -> u32 {
+    hash_combine2(v.x, hash2(Vec2::new(v.y, v.z)))
 }
 
 pub fn uint_to_u01_float(h: u32) -> f32 {
@@ -66,11 +66,11 @@ impl Rand {
         range.start + (rand * (range.end - range.start))
     }
 
-    pub fn gen_vec2(&mut self) -> Vec2 {
+    pub fn gen_vec2(&mut self) -> Vec2<f32> {
         Vec2::new(self.gen_float(), self.gen_float())
     }
 
-    pub fn gen_in_unit_sphere(&mut self) -> Vec3 {
+    pub fn gen_in_unit_sphere(&mut self) -> Vec3<f32> {
         let mut random = || {
             self.gen_range(Range {
                 start: -1.,
@@ -81,17 +81,17 @@ impl Rand {
         loop {
             let sample = Vec3::new(random(), random(), random());
 
-            if sample.length_squared() < 1. {
+            if sample.magnitude_squared() < 1. {
                 break sample;
             }
         }
     }
 
-    pub fn gen_unit_vector(&mut self) -> Vec3 {
-        self.gen_in_unit_sphere().normalize()
+    pub fn gen_unit_vector(&mut self) -> Vec3<f32> {
+        self.gen_in_unit_sphere().normalized()
     }
 
-    pub fn gen_on_hemisphere(&mut self, normal: Vec3) -> Vec3 {
+    pub fn gen_on_hemisphere(&mut self, normal: Vec3<f32>) -> Vec3<f32> {
         let on_unit_sphere = self.gen_unit_vector();
 
         if on_unit_sphere.dot(normal) > 0. {
@@ -101,27 +101,27 @@ impl Rand {
         }
     }
 
-    pub fn gen_in_unit_disk(&mut self) -> Vec2 {
+    pub fn gen_in_unit_disk(&mut self) -> Vec2<f32> {
         let mut random = || self.gen_range(Range::new(-1., 1.));
 
         loop {
             let sample = Vec2::new(random(), random());
 
-            if sample.length_squared() < 1. {
+            if sample.magnitude_squared() < 1. {
                 break sample;
             }
         }
     }
 }
 
-impl From<UVec2> for Rand {
-    fn from(value: UVec2) -> Self {
+impl From<Vec2<u32>> for Rand {
+    fn from(value: Vec2<u32>) -> Self {
         Self::new(hash2(value))
     }
 }
 
-impl From<UVec3> for Rand {
-    fn from(value: UVec3) -> Self {
+impl From<Vec3<u32>> for Rand {
+    fn from(value: Vec3<u32>) -> Self {
         Self::new(hash3(value))
     }
 }
