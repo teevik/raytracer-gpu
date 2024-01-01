@@ -2,7 +2,7 @@ use spirv_std::glam::Vec3;
 
 use crate::data::Face;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Ray {
     pub origin: Vec3,
     pub direction: Vec3,

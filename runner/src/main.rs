@@ -1,6 +1,9 @@
+mod scene;
+
 use std::fs;
 
 use bevy_utils::default;
+use scene::scene;
 use wgpu::{
     include_spirv,
     util::{BufferInitDescriptor, DeviceExt},
@@ -16,7 +19,9 @@ async fn main() {
 
     let shader = include_spirv!(env!("shader.spv"));
     let screen_size: [u32; 2] = [800, 400];
-    let amount_of_samples = 100;
+    let amount_of_samples = 5;
+    let max_depth: u32 = 400;
+    let spheres = scene();
 
     // Setup
     let instance = Instance::new(InstanceDescriptor {
@@ -50,6 +55,18 @@ async fn main() {
         usage: BufferUsages::UNIFORM,
     });
 
+    let max_depth_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("Screen size buffer"),
+        contents: bytemuck::bytes_of(&max_depth),
+        usage: BufferUsages::UNIFORM,
+    });
+
+    let sphere_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("Sphere buffer"),
+        contents: bytemuck::cast_slice(spheres.as_slice()),
+        usage: BufferUsages::STORAGE | BufferUsages::MAP_READ,
+    });
+
     let output_buffer = device.create_buffer(&BufferDescriptor {
         label: Some("Output buffer"),
         size: ((screen_size[0] * screen_size[1]) as u64) * 4 * 4,
@@ -72,6 +89,26 @@ async fn main() {
             },
             BindGroupLayoutEntry {
                 binding: 1,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 2,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 3,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
@@ -106,6 +143,14 @@ async fn main() {
             },
             BindGroupEntry {
                 binding: 1,
+                resource: max_depth_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: sphere_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 3,
                 resource: output_buffer.as_entire_binding(),
             },
         ],
@@ -145,7 +190,7 @@ async fn main() {
 
     for pixel in output_data {
         let pixel = pixel.map(|c| c / (amount_of_samples as f32));
-        // let pixel = pixel.map(|c| c.sqrt()); // map from linear to gamma 2
+        let pixel = pixel.map(|c| c.sqrt()); // map from linear to gamma 2
         let pixel = pixel.map(|c| f32::round(c * 255.) as u8);
 
         output_ppm += &format!("{} {} {}\n", pixel[0], pixel[1], pixel[2]);

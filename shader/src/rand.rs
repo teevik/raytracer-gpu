@@ -1,4 +1,4 @@
-use spirv_std::glam::{UVec2, UVec3, Vec2, Vec3Swizzles};
+use spirv_std::glam::{UVec2, UVec3, Vec2, Vec3, Vec3Swizzles};
 
 use crate::data::Range;
 
@@ -56,6 +56,7 @@ impl Rand {
     pub fn gen_float(&mut self) -> f32 {
         let rand = self.gen();
 
+        // (rand as f32) / (u32::MAX as f32)
         uint_to_u01_float(rand)
     }
 
@@ -67,6 +68,49 @@ impl Rand {
 
     pub fn gen_vec2(&mut self) -> Vec2 {
         Vec2::new(self.gen_float(), self.gen_float())
+    }
+
+    pub fn gen_in_unit_sphere(&mut self) -> Vec3 {
+        let mut random = || {
+            self.gen_range(Range {
+                start: -1.,
+                end: 1.,
+            })
+        };
+
+        loop {
+            let sample = Vec3::new(random(), random(), random());
+
+            if sample.length_squared() < 1. {
+                break sample;
+            }
+        }
+    }
+
+    pub fn gen_unit_vector(&mut self) -> Vec3 {
+        self.gen_in_unit_sphere().normalize()
+    }
+
+    pub fn gen_on_hemisphere(&mut self, normal: Vec3) -> Vec3 {
+        let on_unit_sphere = self.gen_unit_vector();
+
+        if on_unit_sphere.dot(normal) > 0. {
+            on_unit_sphere
+        } else {
+            -on_unit_sphere
+        }
+    }
+
+    pub fn gen_in_unit_disk(&mut self) -> Vec2 {
+        let mut random = || self.gen_range(Range::new(-1., 1.));
+
+        loop {
+            let sample = Vec2::new(random(), random());
+
+            if sample.length_squared() < 1. {
+                break sample;
+            }
+        }
     }
 }
 

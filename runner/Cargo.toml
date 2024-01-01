@@ -4,12 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+shader = { path =  "../shader" }
 wgpu = { version = "0.18", features = ["spirv"] }
 env_logger = "0.10"
-bytemuck = { version = "1.14", features = ["derive"] }
+bytemuck.workspace = true
 pollster = { version = "0.3", features = ["macro"] }
 bevy_utils = "0.12"
 flume = "0.11"
+rand = "0.8"
+vek = "0.16.1"
 
 [build-dependencies]
 spirv-builder = "0.9"

@@ -1,20 +1,24 @@
+use bytemuck::{Pod, Zeroable};
 use spirv_std::{glam::Vec3, num_traits::Float};
 
 use crate::{
     data::{Face, Range},
+    material::Material,
     ray::Ray,
     RayHit,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
 pub struct Sphere {
-    pub center: Vec3,
+    pub center: [f32; 3],
     pub radius: f32,
+    pub material: Material,
 }
 
 impl Sphere {
     pub fn raytrace(self, ray: Ray, range: Range<f32>) -> RayHit {
-        let center_to_origin = ray.origin - self.center;
+        let center_to_origin = ray.origin - Vec3::from(self.center);
         let a = ray.direction.length_squared();
         let half_b = Vec3::dot(center_to_origin, ray.direction);
         let c = center_to_origin.length_squared() - (self.radius * self.radius);
@@ -24,7 +28,7 @@ impl Sphere {
             return RayHit::none();
         }
 
-        let discriminant_sqrt = Float::sqrt(discriminant.sqrt());
+        let discriminant_sqrt = Float::sqrt(discriminant);
 
         // Find the nearest root that lies in the acceptable range
         let mut root = (-half_b - discriminant_sqrt) / a;
@@ -39,7 +43,7 @@ impl Sphere {
         let distance = root;
         let point = ray.at(distance);
 
-        let outward_normal = (point - self.center) / self.radius;
+        let outward_normal = (point - Vec3::from(self.center)) / self.radius;
         let face = ray.get_face(outward_normal);
 
         let normal = match face {
@@ -47,12 +51,15 @@ impl Sphere {
             Face::Back => -outward_normal,
         };
 
+        let material = self.material;
+
         RayHit {
             did_hit: true,
             distance,
             point,
             face,
             normal,
+            material,
         }
     }
 }

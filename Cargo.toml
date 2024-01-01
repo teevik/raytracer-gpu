@@ -1,5 +1,9 @@
 [workspace]
+resolver = "2"
 members = [
   "runner",
   "shader"
 ]
+
+[workspace.dependencies]
+bytemuck = { version = "1.14", features = ["derive"] }
