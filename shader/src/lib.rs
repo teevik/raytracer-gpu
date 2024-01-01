@@ -151,27 +151,24 @@ fn defocus_sample_offset(rand: &mut Rand) -> Vec2<f32> {
 #[spirv(compute(threads(1)))]
 pub fn main(
     #[spirv(global_invocation_id)] pixel_position: glam::UVec3,
-    #[spirv(uniform, descriptor_set = 0, binding = 0)] &screen_size: &Vec2<u32>,
-    #[spirv(uniform, descriptor_set = 0, binding = 1)] &max_depth: &u32,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] &seed: &u32,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] &raytrace_settings: &RaytraceSettings,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] spheres: &[Sphere],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] output: &mut [Vec3<f32>],
 ) {
-    let pixel_position = Vec3::new(pixel_position.x, pixel_position.y, pixel_position.z);
+    let pixel_position = Vec2::new(pixel_position.x, pixel_position.y);
 
-    let camera = Camera {
-        position: Vec3::new(13., 2., 3.),
-        target: Vec3::new(0., 0., 0.),
-        up: Vec3::new(0., 1., 0.),
-
-        vertical_fov: (20.).to_radians(),
-        defocus_angle: (0.6).to_radians(),
-        focus_distance: 10.,
-    };
+    let RaytraceSettings {
+        camera,
+        screen_size,
+        amount_of_samples,
+        max_depth,
+    } = raytrace_settings;
 
     let viewport = calculate_viewport(camera, screen_size);
 
-    let mut rand = Rand::from(pixel_position);
-    let sample_position = pixel_position.xy().as_::<f32>() + pixel_sample_offset(&mut rand);
+    let mut rand = Rand::from(pixel_position.with_z(seed));
+    let sample_position = pixel_position.as_::<f32>() + pixel_sample_offset(&mut rand);
 
     let pixel_center = viewport.upper_left_pixel_position
         + sample_position.x * viewport.horizontal_pixel_delta
@@ -191,5 +188,6 @@ pub fn main(
 
     let color = ray_color(ray, spheres, max_depth, &mut rand);
 
-    output[(pixel_position.y * screen_size.x + pixel_position.x) as usize] += color;
+    output[(pixel_position.y * screen_size.x + pixel_position.x) as usize] +=
+        color / (amount_of_samples as f32);
 }

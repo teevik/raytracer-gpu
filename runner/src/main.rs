@@ -1,9 +1,11 @@
 mod scene;
 
 use bevy_utils::default;
+use rand::{thread_rng, Rng};
 use scene::scene;
-use std::{fs, mem::size_of};
-use vek::{Vec2, Vec3};
+use shader::{Camera, RaytraceSettings};
+use std::{fs, mem::size_of, time::Instant};
+use vek::{num_traits::Float, Vec2, Vec3};
 use wgpu::{
     include_spirv,
     util::{BufferInitDescriptor, DeviceExt},
@@ -18,9 +20,28 @@ async fn main() {
     env_logger::init();
 
     let shader = include_spirv!(env!("shader.spv"));
-    let screen_size: Vec2<u32> = Vec2::new(800, 400);
-    let amount_of_samples = 1;
-    let max_depth: u32 = 400;
+
+    let camera = Camera {
+        position: Vec3::new(13., 2., 3.),
+        target: Vec3::new(0., 0., 0.),
+        up: Vec3::new(0., 1., 0.),
+
+        vertical_fov: (20.).to_radians(),
+        defocus_angle: (0.6).to_radians(),
+        focus_distance: 10.,
+    };
+
+    let screen_size = Vec2::new(800, 400);
+    let amount_of_samples = 10;
+    let max_depth = 100;
+
+    let raytrace_settings = RaytraceSettings {
+        camera,
+        screen_size,
+        amount_of_samples,
+        max_depth,
+    };
+
     let spheres = scene();
 
     // Setup
@@ -49,16 +70,17 @@ async fn main() {
     let compute_shader_module = device.create_shader_module(shader);
 
     // Data
-    let screen_size_buffer = device.create_buffer_init(&BufferInitDescriptor {
-        label: Some("Screen size buffer"),
-        contents: bytemuck::bytes_of(&screen_size),
-        usage: BufferUsages::UNIFORM,
+    let seed_buffer = device.create_buffer(&BufferDescriptor {
+        label: Some("Seed buffer"),
+        size: size_of::<u32>() as u64,
+        mapped_at_creation: false,
+        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
     });
 
-    let max_depth_buffer = device.create_buffer_init(&BufferInitDescriptor {
-        label: Some("Screen size buffer"),
-        contents: bytemuck::bytes_of(&max_depth),
-        usage: BufferUsages::UNIFORM,
+    let raytrace_settings_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("Raytrace settings buffer"),
+        contents: bytemuck::bytes_of(&raytrace_settings),
+        usage: BufferUsages::STORAGE,
     });
 
     let sphere_buffer = device.create_buffer_init(&BufferInitDescriptor {
@@ -91,7 +113,7 @@ async fn main() {
                 binding: 1,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
+                    ty: BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
@@ -139,11 +161,11 @@ async fn main() {
         entries: &[
             BindGroupEntry {
                 binding: 0,
-                resource: screen_size_buffer.as_entire_binding(),
+                resource: seed_buffer.as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 1,
-                resource: max_depth_buffer.as_entire_binding(),
+                resource: raytrace_settings_buffer.as_entire_binding(),
             },
             BindGroupEntry {
                 binding: 2,
@@ -156,16 +178,29 @@ async fn main() {
         ],
     });
 
-    let mut encoder = device.create_command_encoder(&default());
+    let mut rng = thread_rng();
 
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&default());
-        compute_pass.set_pipeline(&compute_pipeline);
-        compute_pass.set_bind_group(0, &bind_group, &[]);
-        compute_pass.dispatch_workgroups(screen_size[0], screen_size[1], amount_of_samples);
+    let time_started = Instant::now();
+    for i in 0..amount_of_samples {
+        eprintln!("Sample {i}");
+
+        let seed = rng.gen::<u32>();
+        queue.write_buffer(&seed_buffer, 0, bytemuck::bytes_of(&seed));
+
+        let mut encoder = device.create_command_encoder(&default());
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&default());
+            compute_pass.set_pipeline(&compute_pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.dispatch_workgroups(screen_size[0], screen_size[1], 1);
+        }
+
+        queue.submit([encoder.finish()]);
+        device.poll(wgpu::MaintainBase::Wait);
     }
 
-    queue.submit([encoder.finish()]);
+    let elapsed_time = time_started.elapsed().as_secs_f32();
+    eprintln!("Elapsed time: {elapsed_time:.2}");
 
     let buffer_slice = output_buffer.slice(..);
 
@@ -189,7 +224,6 @@ async fn main() {
     output_ppm += &format!("P3\n{} {}\n255\n", screen_size[0], screen_size[1]);
 
     for pixel in output_data {
-        let pixel = pixel.map(|c| c / (amount_of_samples as f32));
         let pixel = pixel.map(|c| c.sqrt()); // map from linear to gamma 2
         let pixel = pixel.map(|c| f32::round(c * 255.) as u8);
 
