@@ -19,7 +19,7 @@ pub struct Sphere {
 
 impl Sphere {
     pub fn raytrace(self, ray: Ray, range: Range<f32>) -> RayHit {
-        let center_to_origin = ray.origin - Vec3::from(self.center);
+        let center_to_origin = ray.origin - self.center;
         let a = ray.direction.magnitude_squared();
         let half_b = Vec3::dot(center_to_origin, ray.direction);
         let c = center_to_origin.magnitude_squared() - (self.radius * self.radius);
@@ -44,7 +44,7 @@ impl Sphere {
         let distance = root;
         let point = ray.at(distance);
 
-        let outward_normal = (point - Vec3::from(self.center)) / self.radius;
+        let outward_normal = (point - self.center) / self.radius;
         let face = ray.get_face(outward_normal);
 
         let normal = match face {

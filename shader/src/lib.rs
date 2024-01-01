@@ -122,7 +122,7 @@ fn ray_color(ray: Ray, spheres: &[Sphere], max_depth: u32, rand: &mut Rand) -> V
                 next_ray = scatter_result.scattered;
             } else {
                 // Didn't scatter
-                return accumulated_color;
+                return Vec3::zero();
             }
         } else {
             // Didn't hit anything
