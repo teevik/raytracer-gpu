@@ -1,4 +1,4 @@
-use spirv_builder::{Capability, MetadataPrintout, SpirvBuilder};
+use spirv_builder::{MetadataPrintout, SpirvBuilder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if cfg!(target_os = "linux") {
@@ -9,10 +9,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("cargo:rustc-link-lib=vulkan");
     }
 
-    SpirvBuilder::new("../shader", "spirv-unknown-vulkan1.2")
+    SpirvBuilder::new("../shader", "spirv-unknown-spv1.3")
         .print_metadata(MetadataPrintout::Full)
-        .capability(Capability::Float64)
-        .capability(Capability::Int64)
         .build()?;
 
     Ok(())

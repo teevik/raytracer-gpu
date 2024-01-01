@@ -11,83 +11,35 @@ use data::{Range, RayHit};
 use rand::Rand;
 use ray::Ray;
 use spirv_std::{glam, num_traits::Float, spirv};
-
-pub use material::{Material, Reflection};
-pub use sphere::Sphere;
 use vek::{Vec2, Vec3};
 
-pub type F = f32;
-
-#[derive(Clone, Copy, Zeroable, Pod)]
-#[repr(C)]
-pub struct Camera {
-    pub position: Vec3<F>,
-    pub target: Vec3<F>,
-    pub up: Vec3<F>,
-
-    pub vertical_fov: F,
-    pub defocus_angle: F,
-    pub focus_distance: F,
-}
+pub use glam::UVec3;
+pub use material::{Material, Reflection};
+pub use sphere::Sphere;
 
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct RaytraceSettings {
-    pub camera: Camera,
+    pub viewport: Viewport,
     pub screen_size: Vec2<u32>,
     pub amount_of_samples: u32,
     pub max_depth: u32,
 }
 
-struct Viewport {
-    upper_left_pixel_position: Vec3<F>,
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct Viewport {
+    pub origin: Vec3<f32>,
+    pub upper_left_pixel_position: Vec3<f32>,
 
-    horizontal_pixel_delta: Vec3<F>,
-    vertical_pixel_delta: Vec3<F>,
+    pub horizontal_pixel_delta: Vec3<f32>,
+    pub vertical_pixel_delta: Vec3<f32>,
 
-    horizontal_defocus_disk: Vec3<F>,
-    vertical_defocus_disk: Vec3<F>,
+    pub horizontal_defocus_disk: Vec3<f32>,
+    pub vertical_defocus_disk: Vec3<f32>,
 }
 
-fn calculate_viewport(camera: Camera, screen_size: Vec2<u32>) -> Viewport {
-    let aspect_ratio = (screen_size.x as F) / (screen_size.y as F);
-
-    let h = Float::tan(camera.vertical_fov / 2.);
-    let height = 2.0 * h * camera.focus_distance;
-    let width = height * aspect_ratio;
-
-    let w = (camera.position - camera.target).normalized();
-    let u = Vec3::cross(camera.up, w).normalized();
-    let v = Vec3::cross(w, u);
-
-    let horizontal = width * u;
-    let vertical = -height * v;
-
-    let horizontal_pixel_delta = horizontal / (screen_size.x as F);
-    let vertical_pixel_delta = vertical / (screen_size.y as F);
-
-    let upper_left_corner =
-        camera.position - (camera.focus_distance * w) - horizontal / 2. - vertical / 2.;
-
-    let upper_left_pixel_position =
-        upper_left_corner + horizontal_pixel_delta / 2. + vertical_pixel_delta / 2.;
-
-    let defocus_radius = camera.focus_distance * Float::tan(camera.defocus_angle / 2.);
-    let horizontal_defocus_disk = u * defocus_radius;
-    let vertical_defocus_disk = v * defocus_radius;
-
-    Viewport {
-        upper_left_pixel_position,
-
-        horizontal_pixel_delta,
-        vertical_pixel_delta,
-
-        horizontal_defocus_disk,
-        vertical_defocus_disk,
-    }
-}
-
-fn raytrace_spheres(spheres: &[Sphere], ray: Ray, range: Range<F>) -> RayHit {
+fn raytrace_spheres(spheres: &[Sphere], ray: Ray, range: Range<f32>) -> RayHit {
     let mut closest_hit = RayHit::none();
     let mut closest_distance = range.end;
 
@@ -109,7 +61,7 @@ fn raytrace_spheres(spheres: &[Sphere], ray: Ray, range: Range<F>) -> RayHit {
     closest_hit
 }
 
-fn ray_color(ray: Ray, spheres: &[Sphere], max_depth: u32, rand: &mut Rand) -> Vec3<F> {
+fn ray_color(ray: Ray, spheres: &[Sphere], max_depth: u32, rand: &mut Rand) -> Vec3<f32> {
     let mut accumulated_color = Vec3::one();
     let mut next_ray = ray;
 
@@ -117,7 +69,7 @@ fn ray_color(ray: Ray, spheres: &[Sphere], max_depth: u32, rand: &mut Rand) -> V
         let ray_hit = raytrace_spheres(spheres, next_ray, Range::new(0.001, Float::max_value()));
 
         if ray_hit.did_hit {
-            let scatter_result = ray_hit.material.scatter(ray, ray_hit, rand);
+            let scatter_result = ray_hit.material.scatter(next_ray, ray_hit, rand);
 
             if scatter_result.did_scatter {
                 accumulated_color *= scatter_result.attenuation;
@@ -142,11 +94,11 @@ fn ray_color(ray: Ray, spheres: &[Sphere], max_depth: u32, rand: &mut Rand) -> V
     Vec3::zero()
 }
 
-fn pixel_sample_offset(rand: &mut Rand) -> Vec2<F> {
+fn pixel_sample_offset(rand: &mut Rand) -> Vec2<f32> {
     rand.gen_vec2() - (Vec2::one() / 2.) // From -0.5 to 0.5
 }
 
-fn defocus_sample_offset(rand: &mut Rand) -> Vec2<F> {
+fn defocus_sample_offset(rand: &mut Rand) -> Vec2<f32> {
     rand.gen_in_unit_disk()
 }
 
@@ -156,28 +108,26 @@ pub fn main(
     #[spirv(uniform, descriptor_set = 0, binding = 0)] &seed: &u32,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] &raytrace_settings: &RaytraceSettings,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] spheres: &[Sphere],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] output: &mut [Vec3<F>],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] output: &mut [Vec3<f32>],
 ) {
     let pixel_position = Vec2::new(pixel_position.x, pixel_position.y);
 
     let RaytraceSettings {
-        camera,
+        viewport,
         screen_size,
         amount_of_samples,
         max_depth,
     } = raytrace_settings;
 
-    let viewport = calculate_viewport(camera, screen_size);
-
     let mut rand = Rand::from(pixel_position.with_z(seed));
-    let sample_position = pixel_position.as_::<F>() + pixel_sample_offset(&mut rand);
+    let sample_position = pixel_position.as_::<f32>() + pixel_sample_offset(&mut rand);
 
     let pixel_center = viewport.upper_left_pixel_position
         + sample_position.x * viewport.horizontal_pixel_delta
         + sample_position.y * viewport.vertical_pixel_delta;
 
     let defocus_offset = defocus_sample_offset(&mut rand);
-    let ray_origin = camera.position
+    let ray_origin = viewport.origin
         + defocus_offset.x * viewport.horizontal_defocus_disk
         + defocus_offset.y * viewport.vertical_defocus_disk;
 
@@ -191,5 +141,5 @@ pub fn main(
     let color = ray_color(ray, spheres, max_depth, &mut rand);
 
     output[(pixel_position.y * screen_size.x + pixel_position.x) as usize] +=
-        color / (amount_of_samples as F);
+        color / (amount_of_samples as f32);
 }

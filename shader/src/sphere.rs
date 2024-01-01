@@ -6,19 +6,19 @@ use crate::{
     data::{Face, Range},
     material::Material,
     ray::Ray,
-    RayHit, F,
+    RayHit,
 };
 
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct Sphere {
-    pub center: Vec3<F>,
-    pub radius: F,
+    pub center: Vec3<f32>,
+    pub radius: f32,
     pub material: Material,
 }
 
 impl Sphere {
-    pub fn raytrace(self, ray: Ray, range: Range<F>) -> RayHit {
+    pub fn raytrace(self, ray: Ray, range: Range<f32>) -> RayHit {
         let center_to_origin = ray.origin - self.center;
         let a = ray.direction.magnitude_squared();
         let half_b = Vec3::dot(center_to_origin, ray.direction);

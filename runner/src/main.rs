@@ -3,7 +3,7 @@ mod scene;
 use bevy_utils::default;
 use rand::{thread_rng, Rng};
 use scene::scene;
-use shader::{Camera, RaytraceSettings};
+use shader::{RaytraceSettings, Sphere, UVec3, Viewport};
 use std::{fs, mem::size_of, time::Instant};
 use vek::{num_traits::Float, Vec2, Vec3};
 use wgpu::{
@@ -14,6 +14,78 @@ use wgpu::{
     DeviceDescriptor, Features, Instance, InstanceDescriptor, Maintain, PipelineLayoutDescriptor,
     ShaderStages,
 };
+
+pub struct Camera {
+    pub position: Vec3<f32>,
+    pub target: Vec3<f32>,
+    pub up: Vec3<f32>,
+
+    pub vertical_fov: f32,
+    pub defocus_angle: f32,
+    pub focus_distance: f32,
+}
+
+fn calculate_viewport(camera: Camera, screen_size: Vec2<u32>) -> Viewport {
+    let aspect_ratio = (screen_size.x as f32) / (screen_size.y as f32);
+
+    let h = Float::tan(camera.vertical_fov / 2.);
+    let height = 2.0 * h * camera.focus_distance;
+    let width = height * aspect_ratio;
+
+    let w = (camera.position - camera.target).normalized();
+    let u = Vec3::cross(camera.up, w).normalized();
+    let v = Vec3::cross(w, u);
+
+    let horizontal = width * u;
+    let vertical = -height * v;
+
+    let horizontal_pixel_delta = horizontal / (screen_size.x as f32);
+    let vertical_pixel_delta = vertical / (screen_size.y as f32);
+
+    let upper_left_corner =
+        camera.position - (camera.focus_distance * w) - horizontal / 2. - vertical / 2.;
+
+    let upper_left_pixel_position =
+        upper_left_corner + horizontal_pixel_delta / 2. + vertical_pixel_delta / 2.;
+
+    let defocus_radius = camera.focus_distance * Float::tan(camera.defocus_angle / 2.);
+    let horizontal_defocus_disk = u * defocus_radius;
+    let vertical_defocus_disk = v * defocus_radius;
+
+    Viewport {
+        origin: camera.position,
+        upper_left_pixel_position,
+
+        horizontal_pixel_delta,
+        vertical_pixel_delta,
+
+        horizontal_defocus_disk,
+        vertical_defocus_disk,
+    }
+}
+
+#[allow(dead_code)]
+fn render_cpu(raytrace_settings: &RaytraceSettings, spheres: &[Sphere]) -> Vec<Vec3<f32>> {
+    let screen_size = raytrace_settings.screen_size;
+
+    let mut output = vec![Vec3::<f32>::zero(); (screen_size.x * screen_size.y) as usize];
+
+    for _ in 0..raytrace_settings.amount_of_samples {
+        for y in 0..screen_size.y {
+            for x in 0..screen_size.x {
+                shader::main(
+                    UVec3 { x, y, z: 0 },
+                    &0,
+                    raytrace_settings,
+                    spheres,
+                    &mut output,
+                );
+            }
+        }
+    }
+
+    output
+}
 
 #[pollster::main]
 async fn main() {
@@ -32,11 +104,13 @@ async fn main() {
     };
 
     let screen_size = Vec2::new(800, 400);
-    let amount_of_samples = 5;
+    let viewport = calculate_viewport(camera, screen_size);
+
+    let amount_of_samples = 10;
     let max_depth = 50;
 
     let raytrace_settings = RaytraceSettings {
-        camera,
+        viewport,
         screen_size,
         amount_of_samples,
         max_depth,
