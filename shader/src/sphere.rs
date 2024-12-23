@@ -3,9 +3,11 @@ use spirv_std::num_traits::Float;
 use vek::Vec3;
 
 use crate::{
+    bvh::Aabb,
     data::{Face, Range},
     material::Material,
     ray::Ray,
+    traits::Raycastable,
     RayHit,
 };
 
@@ -18,7 +20,15 @@ pub struct Sphere {
 }
 
 impl Sphere {
-    pub fn raytrace(self, ray: Ray, range: Range<f32>) -> RayHit {
+    pub fn get_aabb(self) -> Aabb {
+        let radius = Vec3::broadcast(self.radius);
+
+        Aabb::from_extremes(self.center - radius, self.center + radius)
+    }
+}
+
+impl Raycastable for Sphere {
+    fn raycast(self, ray: Ray, range: Range) -> RayHit {
         let center_to_origin = ray.origin - self.center;
         let a = ray.direction.magnitude_squared();
         let half_b = Vec3::dot(center_to_origin, ray.direction);

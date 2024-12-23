@@ -59,10 +59,10 @@ impl Rand {
         uint_to_u01_float(rand)
     }
 
-    pub fn gen_range(&mut self, range: Range<f32>) -> f32 {
+    pub fn gen_range(&mut self, range: Range) -> f32 {
         let rand = self.gen_float();
 
-        range.start + (rand * (range.end - range.start))
+        range.min + (rand * (range.max - range.min))
     }
 
     pub fn gen_vec2(&mut self) -> Vec2<f32> {
@@ -70,12 +70,7 @@ impl Rand {
     }
 
     pub fn gen_in_unit_sphere(&mut self) -> Vec3<f32> {
-        let mut random = || {
-            self.gen_range(Range {
-                start: -1.,
-                end: 1.,
-            })
-        };
+        let mut random = || self.gen_range(Range { min: -1., max: 1. });
 
         loop {
             let sample = Vec3::new(random(), random(), random());

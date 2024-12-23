@@ -1,16 +1,19 @@
 #![no_std]
 
+mod bvh;
 mod data;
 mod material;
 mod rand;
 mod ray;
 mod sphere;
+mod traits;
 
 use bytemuck::{Pod, Zeroable};
 use data::{Range, RayHit};
 use rand::Rand;
 use ray::Ray;
 use spirv_std::{glam, num_traits::Float, spirv};
+use traits::Raycastable;
 use vek::{Vec2, Vec3};
 
 pub use glam::UVec3;
@@ -39,16 +42,16 @@ pub struct Viewport {
     pub vertical_defocus_disk: Vec3<f32>,
 }
 
-fn raytrace_spheres(spheres: &[Sphere], ray: Ray, range: Range<f32>) -> RayHit {
+fn raytrace_spheres(spheres: &[Sphere], ray: Ray, range: Range) -> RayHit {
     let mut closest_hit = RayHit::none();
-    let mut closest_distance = range.end;
+    let mut closest_distance = range.max;
 
     for i in 0..spheres.len() {
-        let ray_hit = spheres[i].raytrace(
+        let ray_hit = spheres[i].raycast(
             ray,
             Range {
-                start: range.start,
-                end: closest_distance,
+                min: range.min,
+                max: closest_distance,
             },
         );
 

@@ -1,20 +1,37 @@
+use spirv_std::num_traits::Float;
 use vek::Vec3;
 
 use crate::{material::Material, ray::Ray};
 
 #[derive(Clone, Copy)]
-pub struct Range<T: Copy> {
-    pub start: T,
-    pub end: T,
+pub struct Range {
+    pub min: f32,
+    pub max: f32,
 }
 
-impl<T: Copy + PartialOrd> Range<T> {
-    pub fn new(start: T, end: T) -> Self {
-        Self { start, end }
+impl Range {
+    pub fn new(start: f32, end: f32) -> Self {
+        Self {
+            min: start,
+            max: end,
+        }
     }
 
-    pub fn contains(self, value: T) -> bool {
-        value >= self.start && value < self.end
+    pub fn combine(a: Self, b: Self) -> Self {
+        Self::new(Float::min(a.min, b.min), Float::max(a.max, b.max))
+    }
+
+    pub fn contains(self, value: f32) -> bool {
+        value >= self.min && value < self.max
+    }
+
+    pub fn expand(self, delta: f32) -> Range {
+        let padding = delta / 2.;
+
+        Range {
+            min: self.min - padding,
+            max: self.max + padding,
+        }
     }
 }
 
