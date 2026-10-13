@@ -1,8 +1,8 @@
-use rand::RngExt;
+use glam::Vec3;
+use rand::{Rng, RngExt};
 use shader::{Material, Sphere};
-use vek::Vec3;
 
-pub fn scene() -> Vec<Sphere> {
+pub fn scene(rng: &mut impl Rng) -> Vec<Sphere> {
     let mut spheres = Vec::new();
 
     // Ground
@@ -32,8 +32,6 @@ pub fn scene() -> Vec<Sphere> {
         radius: 1.,
         material: Material::metal(Vec3::new(0.7, 0.6, 0.5), 0.),
     });
-
-    let rng = &mut rand::rng();
 
     for a in -11..11 {
         for b in -11..11 {

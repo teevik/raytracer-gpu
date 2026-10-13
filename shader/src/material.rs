@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
+use glam::Vec3;
 use spirv_std::num_traits::Float;
-use vek::Vec3;
 
 use crate::{
     data::{Face, RayHit, ScatterResult},
@@ -20,17 +20,24 @@ pub enum Reflection {
 unsafe impl Zeroable for Reflection {}
 unsafe impl Pod for Reflection {}
 
+/// Shared with the host through the sphere storage buffer. naga and Vulkan use std430 here, where
+/// a `vec3` is 16-byte aligned and a struct containing one is padded to a multiple of 16, while
+/// glam's `Vec3` is 12 bytes / align 4 in Rust. `albedo` goes first so it sits at offset 0, and
+/// the explicit trailing padding makes the Rust size (32) match the std430 size.
 #[derive(Clone, Copy, Default, Zeroable, Pod)]
 #[repr(C)]
 pub struct Material {
-    pub reflection: Reflection,
-    pub albedo: Vec3<f32>,
+    pub albedo: Vec3,
     pub fuzz: f32,
     pub refraction_index: f32,
+    pub reflection: Reflection,
+    _padding: [u32; 2],
 }
 
+const _: () = assert!(size_of::<Material>() == 32);
+
 impl Material {
-    pub fn diffuse(albedo: Vec3<f32>) -> Self {
+    pub fn diffuse(albedo: Vec3) -> Self {
         Self {
             reflection: Reflection::Diffuse,
             albedo,
@@ -38,7 +45,7 @@ impl Material {
         }
     }
 
-    pub fn metal(albedo: Vec3<f32>, fuzz: f32) -> Self {
+    pub fn metal(albedo: Vec3, fuzz: f32) -> Self {
         Self {
             reflection: Reflection::Metal,
             albedo,
@@ -64,7 +71,7 @@ impl Material {
     }
 }
 
-fn is_near_zero(value: Vec3<f32>) -> bool {
+fn is_near_zero(value: Vec3) -> bool {
     const S: f32 = 1e-8;
 
     value.x < S && value.y < S && value.z < S
@@ -77,7 +84,7 @@ fn reflectance(cosine: f32, refraction_ratio: f32) -> f32 {
     r0 + (1. - r0) * Float::powi(1. - cosine, 5)
 }
 
-fn scatter_diffuse(albedo: Vec3<f32>, ray_hit: RayHit, rand: &mut Rand) -> ScatterResult {
+fn scatter_diffuse(albedo: Vec3, ray_hit: RayHit, rand: &mut Rand) -> ScatterResult {
     let mut scatter_direction = ray_hit.normal + rand.gen_unit_vector();
 
     // Catch degenerate scatter direction
@@ -99,13 +106,13 @@ fn scatter_diffuse(albedo: Vec3<f32>, ray_hit: RayHit, rand: &mut Rand) -> Scatt
 }
 
 pub fn scatter_metal(
-    albedo: Vec3<f32>,
+    albedo: Vec3,
     fuzz: f32,
     ray: Ray,
     ray_hit: RayHit,
     rand: &mut Rand,
 ) -> ScatterResult {
-    let reflected = ray.direction.normalized().reflected(ray_hit.normal);
+    let reflected = ray.direction.normalize().reflect(ray_hit.normal);
 
     let scattered = Ray {
         origin: ray_hit.point,
@@ -135,7 +142,7 @@ pub fn scatter_glass(
         Face::Back => refraction_index,
     };
 
-    let unit_direction = ray.direction.normalized();
+    let unit_direction = ray.direction.normalize();
     let cos_theta = Float::min(Vec3::dot(-unit_direction, ray_hit.normal), 1.);
     let sin_theta = Float::sqrt(1. - cos_theta * cos_theta);
 
@@ -143,16 +150,16 @@ pub fn scatter_glass(
         || (reflectance(cos_theta, refraction_ratio) > rand.gen_float());
 
     let direction = if cannot_refract {
-        unit_direction.reflected(ray_hit.normal)
+        unit_direction.reflect(ray_hit.normal)
     } else {
-        unit_direction.refracted(ray_hit.normal, refraction_ratio)
+        unit_direction.refract(ray_hit.normal, refraction_ratio)
     };
 
     let scattered = Ray {
         origin: ray_hit.point,
         direction,
     };
-    let attenuation = Vec3::one();
+    let attenuation = Vec3::ONE;
 
     ScatterResult {
         did_scatter: true,

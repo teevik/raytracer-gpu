@@ -9,4 +9,4 @@ workspace = true
 [dependencies]
 spirv-std.workspace = true
 bytemuck.workspace = true
-vek.workspace = true
+glam.workspace = true

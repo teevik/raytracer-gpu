@@ -1,37 +1,41 @@
+mod bvh;
 mod scene;
 
-use rand::RngExt;
+use bvh::build_bvh;
+use bytemuck::Zeroable;
+use glam::{UVec2, Vec3, Vec4};
+use rand::{rngs::StdRng, Rng, RngExt, SeedableRng};
 use scene::scene;
-use shader::{RaytraceSettings, Sphere, UVec3, Viewport};
+use shader::{BvhNode, RaytraceSettings, Sphere, UVec3, Viewport};
 use std::{fs, mem::size_of, sync::mpsc, time::Instant};
-use vek::{Vec2, Vec3, num_traits::Float};
 use wgpu::{
+    include_spirv,
+    util::{BufferInitDescriptor, DeviceExt},
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingType, BufferBindingType, BufferDescriptor, BufferUsages, ComputePipelineDescriptor,
     DeviceDescriptor, ExperimentalFeatures, Features, Instance, InstanceDescriptor, MapMode,
-    PipelineLayoutDescriptor, PollType, ShaderStages, include_spirv,
-    util::{BufferInitDescriptor, DeviceExt},
+    PipelineLayoutDescriptor, PollType, ShaderStages,
 };
 
 pub struct Camera {
-    pub position: Vec3<f32>,
-    pub target: Vec3<f32>,
-    pub up: Vec3<f32>,
+    pub position: Vec3,
+    pub target: Vec3,
+    pub up: Vec3,
 
     pub vertical_fov: f32,
     pub defocus_angle: f32,
     pub focus_distance: f32,
 }
 
-fn calculate_viewport(camera: Camera, screen_size: Vec2<u32>) -> Viewport {
+fn calculate_viewport(camera: Camera, screen_size: UVec2) -> Viewport {
     let aspect_ratio = (screen_size.x as f32) / (screen_size.y as f32);
 
-    let h = Float::tan(camera.vertical_fov / 2.);
+    let h = f32::tan(camera.vertical_fov / 2.);
     let height = 2.0 * h * camera.focus_distance;
     let width = height * aspect_ratio;
 
-    let w = (camera.position - camera.target).normalized();
-    let u = Vec3::cross(camera.up, w).normalized();
+    let w = (camera.position - camera.target).normalize();
+    let u = Vec3::cross(camera.up, w).normalize();
     let v = Vec3::cross(w, u);
 
     let horizontal = width * u;
@@ -46,7 +50,7 @@ fn calculate_viewport(camera: Camera, screen_size: Vec2<u32>) -> Viewport {
     let upper_left_pixel_position =
         upper_left_corner + horizontal_pixel_delta / 2. + vertical_pixel_delta / 2.;
 
-    let defocus_radius = camera.focus_distance * Float::tan(camera.defocus_angle / 2.);
+    let defocus_radius = camera.focus_distance * f32::tan(camera.defocus_angle / 2.);
     let horizontal_defocus_disk = u * defocus_radius;
     let vertical_defocus_disk = v * defocus_radius;
 
@@ -59,14 +63,43 @@ fn calculate_viewport(camera: Camera, screen_size: Vec2<u32>) -> Viewport {
 
         horizontal_defocus_disk,
         vertical_defocus_disk,
+
+        ..Zeroable::zeroed()
+    }
+}
+
+fn make_rng() -> Box<dyn Rng> {
+    let seed = std::env::var("SEED").unwrap_or_else(|_| "1".to_string());
+
+    if seed == "random" {
+        return Box::new(rand::rng());
+    }
+
+    let seed: u64 = seed
+        .parse()
+        .unwrap_or_else(|_| panic!("SEED must be a u64 or \"random\", got {seed:?}"));
+    Box::new(StdRng::seed_from_u64(seed))
+}
+
+/// Reads an optional env var, falling back to `default` when unset
+fn env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
+    match std::env::var(name) {
+        Ok(value) => value
+            .parse()
+            .unwrap_or_else(|_| panic!("{name} has an invalid value: {value:?}")),
+        Err(_) => default,
     }
 }
 
 #[allow(dead_code)]
-fn render_cpu(raytrace_settings: &RaytraceSettings, spheres: &[Sphere]) -> Vec<Vec3<f32>> {
+fn render_cpu(
+    raytrace_settings: &RaytraceSettings,
+    spheres: &[Sphere],
+    bvh_nodes: &[BvhNode],
+) -> Vec<Vec4> {
     let screen_size = raytrace_settings.screen_size;
 
-    let mut output = vec![Vec3::<f32>::zero(); (screen_size.x * screen_size.y) as usize];
+    let mut output = vec![Vec4::ZERO; (screen_size.x * screen_size.y) as usize];
 
     for _ in 0..raytrace_settings.amount_of_samples {
         for y in 0..screen_size.y {
@@ -77,6 +110,7 @@ fn render_cpu(raytrace_settings: &RaytraceSettings, spheres: &[Sphere]) -> Vec<V
                     raytrace_settings,
                     spheres,
                     &mut output,
+                    bvh_nodes,
                 );
             }
         }
@@ -96,25 +130,30 @@ async fn main() {
         target: Vec3::new(0., 0., 0.),
         up: Vec3::new(0., 1., 0.),
 
-        vertical_fov: (20.).to_radians(),
-        defocus_angle: (0.6).to_radians(),
+        vertical_fov: 20f32.to_radians(),
+        defocus_angle: 0.6f32.to_radians(),
         focus_distance: 10.,
     };
 
-    let screen_size = Vec2::new(800, 400);
+    let screen_size = UVec2::new(800, 400);
     let viewport = calculate_viewport(camera, screen_size);
 
-    let amount_of_samples = 10;
+    let amount_of_samples: u32 = env_or("SAMPLES", 1000);
     let max_depth = 50;
+    let use_bvh = env_or::<u32>("BVH", 1) != 0;
 
     let raytrace_settings = RaytraceSettings {
         viewport,
         screen_size,
         amount_of_samples,
         max_depth,
+        use_bvh: use_bvh as u32,
+        ..Zeroable::zeroed()
     };
 
-    let spheres = scene();
+    let mut rng = make_rng();
+    let spheres = scene(&mut rng);
+    let bvh_nodes = build_bvh(&spheres);
 
     // Setup
     let instance = Instance::new(InstanceDescriptor {
@@ -127,11 +166,20 @@ async fn main() {
         .await
         .expect("No adapter");
     eprintln!("Using adapter: {}", adapter.get_info().name);
+    if use_bvh {
+        eprintln!(
+            "Intersection: BVH ({} nodes over {} spheres)",
+            bvh_nodes.len(),
+            spheres.len()
+        );
+    } else {
+        eprintln!("Intersection: brute force ({} spheres)", spheres.len());
+    }
 
     let (device, queue) = adapter
         .request_device(&DeviceDescriptor {
             label: Some("Device"),
-            required_features: Features::MAPPABLE_PRIMARY_BUFFERS,
+            required_features: Features::empty(),
             required_limits: Default::default(),
             experimental_features: ExperimentalFeatures::disabled(),
             memory_hints: Default::default(),
@@ -159,14 +207,28 @@ async fn main() {
     let sphere_buffer = device.create_buffer_init(&BufferInitDescriptor {
         label: Some("Sphere buffer"),
         contents: bytemuck::cast_slice(spheres.as_slice()),
-        usage: BufferUsages::STORAGE | BufferUsages::MAP_READ,
+        usage: BufferUsages::STORAGE,
     });
 
+    let bvh_node_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("BVH node buffer"),
+        contents: bytemuck::cast_slice(bvh_nodes.as_slice()),
+        usage: BufferUsages::STORAGE,
+    });
+
+    let output_size = (screen_size.x * screen_size.y) as u64 * (size_of::<Vec4>() as u64);
     let output_buffer = device.create_buffer(&BufferDescriptor {
         label: Some("Output buffer"),
-        size: (screen_size[0] * screen_size[1]) as u64 * (size_of::<Vec3<f32>>() as u64),
+        size: output_size,
         mapped_at_creation: false,
-        usage: BufferUsages::STORAGE | BufferUsages::MAP_READ,
+        usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+    });
+
+    let readback_buffer = device.create_buffer(&BufferDescriptor {
+        label: Some("Readback buffer"),
+        size: output_size,
+        mapped_at_creation: false,
+        usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
     });
 
     let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -212,6 +274,16 @@ async fn main() {
                 },
                 count: None,
             },
+            BindGroupLayoutEntry {
+                binding: 4,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     });
 
@@ -250,10 +322,12 @@ async fn main() {
                 binding: 3,
                 resource: output_buffer.as_entire_binding(),
             },
+            BindGroupEntry {
+                binding: 4,
+                resource: bvh_node_buffer.as_entire_binding(),
+            },
         ],
     });
-
-    let mut rng = rand::rng();
 
     let time_started = Instant::now();
     for i in 0..amount_of_samples {
@@ -267,7 +341,11 @@ async fn main() {
             let mut compute_pass = encoder.begin_compute_pass(&Default::default());
             compute_pass.set_pipeline(&compute_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch_workgroups(screen_size.x.div_ceil(8), screen_size.y.div_ceil(8), 1);
+            compute_pass.dispatch_workgroups(
+                screen_size.x.div_ceil(8),
+                screen_size.y.div_ceil(8),
+                1,
+            );
         }
 
         queue.submit([encoder.finish()]);
@@ -275,9 +353,13 @@ async fn main() {
     }
 
     let elapsed_time = time_started.elapsed().as_secs_f32();
-    eprintln!("Elapsed time: {elapsed_time:.2}");
+    eprintln!("Elapsed time: {elapsed_time:.3}");
 
-    let buffer_slice = output_buffer.slice(..);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_buffer_to_buffer(&output_buffer, 0, &readback_buffer, 0, output_size);
+    queue.submit([encoder.finish()]);
+
+    let buffer_slice = readback_buffer.slice(..);
 
     let (sender, receiver) = mpsc::channel();
     buffer_slice.map_async(MapMode::Read, move |v| sender.send(v).unwrap());
@@ -291,17 +373,17 @@ async fn main() {
         .expect("Buffer map error");
 
     let buffer_view = buffer_slice.get_mapped_range().unwrap();
-    let output_data: &[Vec3<f32>] = bytemuck::cast_slice(&buffer_view);
+    let output_data: &[[f32; 4]] = bytemuck::cast_slice(&buffer_view);
 
     // Export to ppm
     let mut output_ppm = String::new();
-    output_ppm += &format!("P3\n{} {}\n255\n", screen_size[0], screen_size[1]);
+    output_ppm += &format!("P3\n{} {}\n255\n", screen_size.x, screen_size.y);
 
     for pixel in output_data {
-        let pixel = pixel.map(|c| c.sqrt()); // map from linear to gamma 2
-        let pixel = pixel.map(|c| f32::round(c * 255.) as u8);
+        // map from linear to gamma 2, then to 0..=255
+        let [r, g, b, _] = pixel.map(|c| f32::round(c.sqrt() * 255.) as u8);
 
-        output_ppm += &format!("{} {} {}\n", pixel[0], pixel[1], pixel[2]);
+        output_ppm += &format!("{r} {g} {b}\n");
     }
 
     fs::write("image.ppm", output_ppm).unwrap();

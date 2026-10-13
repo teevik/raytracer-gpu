@@ -16,7 +16,9 @@ spirv-std = "0.10.0"
 
 # math
 bytemuck = { version = "1.25", features = ["derive"] }
-vek = { version = "0.17", default-features = false, features = ["rgb", "bytemuck", "libm"] }
+# Must be the glam that spirv-std re-exports (spirv-std 0.10 -> glam 0.33), so only one version
+# ends up in the graph. spirv-std adds `std` on the host and `libm` on the SPIR-V target.
+glam = { version = "0.33", default-features = false, features = ["bytemuck", "u32"] }
 
 # host
 wgpu = { version = "30.0", features = ["spirv"] }

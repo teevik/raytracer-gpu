@@ -1,115 +1,166 @@
-use core::mem::swap;
-
+use bytemuck::{Pod, Zeroable};
+use glam::Vec3;
 use spirv_std::num_traits::Float;
-use vek::Vec3;
 
 use crate::{
-    data::{Range, RayHit},
+    data::{Closest, Range},
     ray::Ray,
-    traits::Raycastable,
+    sphere::Sphere,
 };
 
+/// Axis-aligned bounding box. Each axis spans `min[axis]..max[axis]`.
 #[derive(Clone, Copy)]
 pub struct Aabb {
-    pub axes: Vec3<Range>,
+    pub min: Vec3,
+    pub max: Vec3,
 }
 
 impl Aabb {
-    pub fn from_extremes(a: Vec3<f32>, b: Vec3<f32>) -> Self {
-        let x = Range::new(Float::min(a.x, b.x), Float::max(a.x, b.x));
-        let y = Range::new(Float::min(a.y, b.y), Float::max(a.y, b.y));
-        let z = Range::new(Float::min(a.z, b.z), Float::max(a.z, b.z));
-
+    pub fn from_extremes(a: Vec3, b: Vec3) -> Self {
         Self {
-            axes: Vec3::new(x, y, z),
+            min: a.min(b),
+            max: a.max(b),
         }
     }
 
     pub fn combine(a: Self, b: Self) -> Self {
-        let x = Range::combine(a.axes.x, b.axes.x);
-        let y = Range::combine(a.axes.y, b.axes.y);
-        let z = Range::combine(a.axes.z, b.axes.z);
+        Self {
+            min: a.min.min(b.min),
+            max: a.max.max(b.max),
+        }
+    }
+
+    pub fn center(self) -> Vec3 {
+        (self.min + self.max) / 2.
+    }
+
+    pub fn surface_area(self) -> f32 {
+        let size = self.max - self.min;
+
+        2. * (size.x * size.y + size.y * size.z + size.z * size.x)
+    }
+}
+
+/// A ray prepared for repeated slab tests: `inverse_direction` is computed once per ray.
+#[derive(Clone, Copy)]
+pub struct SlabRay {
+    pub origin: Vec3,
+    pub inverse_direction: Vec3,
+}
+
+impl SlabRay {
+    pub fn new(ray: Ray) -> Self {
+        // A zero direction component would give `inf` here and `0 * inf = NaN` in the slab test
+        // when the origin lies exactly on a slab plane. Nudging it to a tiny same-signed value
+        // keeps every product finite (|slab| * 1e30 stays far below `f32::MAX`) while still
+        // behaving like an axis-parallel ray.
+        fn safe(direction: f32) -> f32 {
+            const EPSILON: f32 = 1e-30;
+
+            if Float::abs(direction) < EPSILON {
+                if direction < 0. { -EPSILON } else { EPSILON }
+            } else {
+                direction
+            }
+        }
+
+        let direction = ray.direction;
 
         Self {
-            axes: Vec3::new(x, y, z),
+            origin: ray.origin,
+            inverse_direction: Vec3::ONE
+                / Vec3::new(safe(direction.x), safe(direction.y), safe(direction.z)),
         }
     }
 
-    pub fn raycast(self, ray: Ray, range: Range) -> bool {
-        let mut range = range;
+    /// Slab test: does the ray overlap `min..max` anywhere inside `range`?
+    pub fn hits(self, min: Vec3, max: Vec3, range: Range) -> bool {
+        let t0 = (min - self.origin) * self.inverse_direction;
+        let t1 = (max - self.origin) * self.inverse_direction;
 
-        for axis in 0..3 {
-            let inverse_direction = 1. / ray.direction[axis];
-            let origin = ray.origin[axis];
+        let entry = t0.min(t1).max_element();
+        let exit = t0.max(t1).min_element();
 
-            let mut t0 = (self.axes[axis].min - origin) * inverse_direction;
-            let mut t1 = (self.axes[axis].max - origin) * inverse_direction;
+        Float::max(entry, range.min) <= Float::min(exit, range.max)
+    }
+}
 
-            if inverse_direction < 0. {
-                swap(&mut t0, &mut t1);
+/// Element of the BVH storage buffer, shared with the host.
+///
+/// Nodes are stored depth first, so an interior node's first child is always the next node.
+/// Traversal is stackless: visit `index + 1` when the box is hit (or after a leaf), and jump to
+/// `exit_index` (the node after this node's whole subtree) when it is missed. Each `Vec3` is
+/// followed by a `u32` so the Rust layout matches std430 (32 bytes, 16-byte aligned fields).
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct BvhNode {
+    pub min: Vec3,
+    /// Index of the first node after this node's subtree.
+    pub exit_index: u32,
+    pub max: Vec3,
+    /// `sphere_index + 1` for a leaf (one sphere per leaf), `0` for an interior node.
+    pub sphere: u32,
+}
+
+const _: () = {
+    assert!(size_of::<BvhNode>() == 32);
+    assert!(core::mem::offset_of!(BvhNode, exit_index) == 12);
+    assert!(core::mem::offset_of!(BvhNode, max) == 16);
+    assert!(core::mem::offset_of!(BvhNode, sphere) == 28);
+};
+
+impl BvhNode {
+    pub fn interior(bounds: Aabb, exit_index: u32) -> Self {
+        Self {
+            min: bounds.min,
+            exit_index,
+            max: bounds.max,
+            sphere: 0,
+        }
+    }
+
+    pub fn leaf(bounds: Aabb, exit_index: u32, sphere_index: u32) -> Self {
+        Self {
+            min: bounds.min,
+            exit_index,
+            max: bounds.max,
+            sphere: sphere_index + 1,
+        }
+    }
+}
+
+/// Finds the closest sphere along `ray` within `range` by walking the BVH.
+pub fn closest_sphere(nodes: &[BvhNode], spheres: &[Sphere], ray: Ray, range: Range) -> Closest {
+    let slab_ray = SlabRay::new(ray);
+    let mut closest = Closest::none(range.max);
+
+    let node_count = nodes.len() as u32;
+    let mut index = 0;
+
+    while index < node_count {
+        let node = nodes[index as usize];
+
+        if node.sphere != 0 {
+            // Leaf: the sphere test is about as cheap as its box test, so skip the box. A leaf's
+            // subtree is just itself, so the next node is always `index + 1`.
+            let sphere_index = node.sphere - 1;
+            let distance = spheres[sphere_index as usize]
+                .intersect_distance(ray, Range::new(range.min, closest.distance));
+
+            if distance < closest.distance {
+                closest = Closest {
+                    index: sphere_index,
+                    distance,
+                };
             }
 
-            range.min = Float::max(t0, range.min);
-            range.max = Float::min(t1, range.max);
-
-            if range.max <= range.min {
-                return false;
-            }
+            index += 1;
+        } else if slab_ray.hits(node.min, node.max, Range::new(range.min, closest.distance)) {
+            index += 1;
+        } else {
+            index = node.exit_index;
         }
-
-        true
-    }
-}
-
-pub struct BvhIndex(usize);
-
-impl BvhIndex {
-    pub fn left(self) -> Self {
-        Self((2 * self.0) + 1)
     }
 
-    pub fn right(self) -> Self {
-        Self((2 * self.0) + 2)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct BvhNode<T: Copy> {
-    bounding_box: Aabb,
-    value: T,
-}
-
-#[derive(Clone, Copy)]
-pub struct Bvh<'a, T: Copy> {
-    nodes: &'a [BvhNode<T>],
-}
-
-impl<'a, T: Copy> Bvh<'a, T> {
-    pub fn root(self) -> BvhIndex {
-        BvhIndex(0)
-    }
-
-    pub fn contains(self, index: BvhIndex) -> bool {
-        index.0 < self.nodes.len()
-    }
-
-    pub fn at(self, index: BvhIndex) -> BvhNode<T> {
-        self.nodes[index.0]
-    }
-}
-
-impl<'a, T: Raycastable + Copy> Raycastable for Bvh<'a, T> {
-    fn raycast(self, ray: Ray, range: Range) -> RayHit {
-        if self.nodes.is_empty() {
-            return RayHit::none();
-        }
-
-        let mut current = self.root();
-
-        if self.contains(current.left()) {
-            // let ray_hit = self.at(current.left()).raycast(ray, )
-        }
-
-        RayHit::none()
-    }
+    closest
 }

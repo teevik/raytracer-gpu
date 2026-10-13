@@ -10,7 +10,7 @@ workspace = true
 [dependencies]
 shader = { path = "../shader" }
 bytemuck.workspace = true
-vek.workspace = true
+glam = { workspace = true, features = ["std"] }
 
 wgpu.workspace = true
 pollster.workspace = true
