@@ -22,23 +22,6 @@ impl Aabb {
             max: a.max(b),
         }
     }
-
-    pub fn combine(a: Self, b: Self) -> Self {
-        Self {
-            min: a.min.min(b.min),
-            max: a.max.max(b.max),
-        }
-    }
-
-    pub fn center(self) -> Vec3 {
-        (self.min + self.max) / 2.
-    }
-
-    pub fn surface_area(self) -> f32 {
-        let size = self.max - self.min;
-
-        2. * (size.x * size.y + size.y * size.z + size.z * size.x)
-    }
 }
 
 /// A ray prepared for repeated slab tests: `inverse_direction` is computed once per ray.

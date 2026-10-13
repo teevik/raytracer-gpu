@@ -1,95 +1,87 @@
+use std::time::Duration;
+
+use glam::Vec3;
+use obvhs::{
+    BvhBuildParams,
+    aabb::Aabb as ObvhsAabb,
+    bvh2::{Bvh2, builder::build_bvh2},
+};
 use shader::{Aabb, BvhNode, Sphere};
 
-/// Builds a BVH over `spheres` with one sphere per leaf
+/// Builds a BVH over `spheres` with one sphere per leaf.
+///
+/// obvhs builds the tree (PLOC plus reinsertion), then it is flattened into the depth-first
+/// exit-index layout the shader walks without a stack.
 pub fn build_bvh(spheres: &[Sphere]) -> Vec<BvhNode> {
-    let mut nodes = Vec::with_capacity(2 * spheres.len());
-
-    if !spheres.is_empty() {
-        let mut indices: Vec<u32> = (0..spheres.len() as u32).collect();
-        build_node(spheres, &mut indices, &mut nodes);
+    if spheres.is_empty() {
+        return Vec::new();
     }
+
+    let aabbs: Vec<ObvhsAabb> = spheres
+        .iter()
+        .map(|sphere| {
+            let Aabb { min, max } = sphere.get_aabb();
+            ObvhsAabb::new(min.into(), max.into())
+        })
+        .collect();
+
+    // The slowest preset still builds this scene in well under a millisecond, and on the GPU it
+    // traces measurably faster than the medium preset.
+    let params = BvhBuildParams {
+        // The shader's leaves hold exactly one sphere
+        max_prims_per_leaf: 1,
+        ..BvhBuildParams::very_slow_build()
+    };
+    let bvh = build_bvh2(&aabbs, params, &mut Duration::default());
+
+    let mut nodes = Vec::with_capacity(bvh.nodes.len());
+    flatten(&bvh, 0, &mut nodes);
 
     nodes
 }
 
-fn bounds_of(spheres: &[Sphere], indices: &[u32]) -> Aabb {
-    indices
-        .iter()
-        .map(|&i| spheres[i as usize].get_aabb())
-        .reduce(Aabb::combine)
-        .expect("BVH node without spheres")
-}
+/// Appends the subtree rooted at `bvh.nodes[index]` to `nodes` in depth-first order.
+fn flatten(bvh: &Bvh2, index: u32, nodes: &mut Vec<BvhNode>) {
+    let node = bvh.nodes[index as usize];
+    let aabb = node.aabb();
+    let bounds = Aabb {
+        min: Vec3::from(aabb.min),
+        max: Vec3::from(aabb.max),
+    };
+    let flat_index = nodes.len();
 
-fn build_node(spheres: &[Sphere], indices: &mut [u32], nodes: &mut Vec<BvhNode>) {
-    let node_index = nodes.len();
-    let bounds = bounds_of(spheres, indices);
-
-    if let [sphere_index] = *indices {
-        nodes.push(BvhNode::leaf(bounds, node_index as u32 + 1, sphere_index));
+    if node.is_leaf() {
+        assert_eq!(node.prim_count, 1, "BVH leaf with more than one sphere");
+        let sphere_index = bvh.primitive_indices[node.first_index as usize];
+        nodes.push(BvhNode::leaf(bounds, flat_index as u32 + 1, sphere_index));
         return;
     }
 
-    // Placeholder, the exit index is only known once the subtree is built
+    // Placeholder, the exit index is only known once the subtree is flattened
     nodes.push(BvhNode::interior(bounds, 0));
 
-    let split = sah_split(spheres, indices);
-    let (left, right) = indices.split_at_mut(split);
-    build_node(spheres, left, nodes);
-    build_node(spheres, right, nodes);
-
-    nodes[node_index].exit_index = nodes.len() as u32;
-}
-
-/// Sorts `indices` along the best axis and returns the split position minimizing
-/// `count_left * area_left + count_right * area_right`.
-fn sah_split(spheres: &[Sphere], indices: &mut [u32]) -> usize {
-    let count = indices.len();
-    let mut best: Option<(f32, usize, usize)> = None; // (cost, axis, split)
-
-    for axis in 0..3 {
-        sort_by_centroid(spheres, indices, axis);
-
-        // right_areas[i] = area of the bounds of indices[i..]
-        let mut right_areas = vec![0.; count];
-        let mut right_bounds = spheres[indices[count - 1] as usize].get_aabb();
-        for i in (1..count).rev() {
-            right_bounds = Aabb::combine(right_bounds, spheres[indices[i] as usize].get_aabb());
-            right_areas[i] = right_bounds.surface_area();
-        }
-
-        let mut left_bounds = spheres[indices[0] as usize].get_aabb();
-        for split in 1..count {
-            left_bounds =
-                Aabb::combine(left_bounds, spheres[indices[split - 1] as usize].get_aabb());
-
-            let cost = split as f32 * left_bounds.surface_area()
-                + (count - split) as f32 * right_areas[split];
-
-            if best.is_none_or(|(best_cost, _, _)| cost < best_cost) {
-                best = Some((cost, axis, split));
-            }
-        }
+    // The shader always visits the first child first, and obvhs leaves child order arbitrary.
+    // Ordering children spatially along the parent's longest axis keeps neighbouring rays on
+    // similar paths, which made traversal noticeably faster on the GPU.
+    let (mut first, mut second) = (node.first_index, node.first_index + 1);
+    let axis = aabb.largest_axis();
+    if bvh.nodes[first as usize].aabb().center_axis(axis)
+        > bvh.nodes[second as usize].aabb().center_axis(axis)
+    {
+        std::mem::swap(&mut first, &mut second);
     }
 
-    let (_, axis, split) = best.expect("SAH split needs at least two spheres");
-    sort_by_centroid(spheres, indices, axis);
+    flatten(bvh, first, nodes);
+    flatten(bvh, second, nodes);
 
-    split
-}
-
-fn sort_by_centroid(spheres: &[Sphere], indices: &mut [u32], axis: usize) {
-    indices.sort_by(|&a, &b| {
-        let ca = spheres[a as usize].get_aabb().center()[axis];
-        let cb = spheres[b as usize].get_aabb().center()[axis];
-        ca.total_cmp(&cb).then(a.cmp(&b))
-    });
+    nodes[flat_index].exit_index = nodes.len() as u32;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scene::scene;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     /// Every sphere appears in exactly one leaf, children lie inside their parent, and the exit
     /// links describe a valid depth-first layout.

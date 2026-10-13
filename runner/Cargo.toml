@@ -11,11 +11,13 @@ workspace = true
 shader = { path = "../shader" }
 bytemuck.workspace = true
 glam = { workspace = true, features = ["std"] }
+obvhs.workspace = true
 
 wgpu.workspace = true
 pollster.workspace = true
 env_logger.workspace = true
 rand.workspace = true
+png.workspace = true
 
 [build-dependencies]
 cargo-gpu-install.workspace = true

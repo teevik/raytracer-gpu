@@ -4,17 +4,16 @@ mod scene;
 use bvh::build_bvh;
 use bytemuck::Zeroable;
 use glam::{UVec2, Vec3, Vec4};
-use rand::{rngs::StdRng, Rng, RngExt, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use scene::scene;
-use shader::{BvhNode, RaytraceSettings, Sphere, UVec3, Viewport};
-use std::{fs, mem::size_of, sync::mpsc, time::Instant};
+use shader::{BvhNode, DispatchParams, RaytraceSettings, Sphere, UVec3, Viewport};
+use std::{fs::File, io::BufWriter, mem::size_of, num::NonZero, sync::mpsc, time::Instant};
 use wgpu::{
-    include_spirv,
-    util::{BufferInitDescriptor, DeviceExt},
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
-    BindingType, BufferBindingType, BufferDescriptor, BufferUsages, ComputePipelineDescriptor,
-    DeviceDescriptor, ExperimentalFeatures, Features, Instance, InstanceDescriptor, MapMode,
-    PipelineLayoutDescriptor, PollType, ShaderStages,
+    BindingResource, BindingType, BufferBinding, BufferBindingType, BufferDescriptor, BufferUsages,
+    ComputePipelineDescriptor, DeviceDescriptor, ExperimentalFeatures, Features, Instance,
+    InstanceDescriptor, MapMode, PipelineLayoutDescriptor, PollType, ShaderStages, include_spirv,
+    util::{BufferInitDescriptor, DeviceExt},
 };
 
 pub struct Camera {
@@ -91,8 +90,32 @@ fn env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
     }
 }
 
+/// Samples traced per pixel by one dispatch. All dispatches go into a single submission, so this
+/// doesn't change submit/sync overhead; it trades two GPU-side costs. Small chunks pay a barrier
+/// and an `output` read-modify-write per dispatch, while large chunks leave the GPU waiting on the
+/// slowest (e.g. glass-heavy) workgroups at the end of each long dispatch. On an RTX 4090, 8-16 was
+/// fastest, 1 was ~15% slower and 64 ~10% slower. It also bounds how long one dispatch runs
+/// (~6 ms here), keeping slow GPUs far from driver watchdogs (TDR, ~2 s on Windows). The float
+/// summation order depends on it, so changing it changes the image at noise level.
+const SAMPLES_PER_DISPATCH: u32 = 16;
+
+/// Splits `amount_of_samples` into the per-dispatch parameters, in order.
+fn dispatch_params(seed: u32, amount_of_samples: u32) -> impl Iterator<Item = DispatchParams> {
+    (0..amount_of_samples)
+        .step_by(SAMPLES_PER_DISPATCH as usize)
+        .map(move |sample_start| DispatchParams {
+            seed,
+            sample_start,
+            sample_count: SAMPLES_PER_DISPATCH.min(amount_of_samples - sample_start),
+            ..Zeroable::zeroed()
+        })
+}
+
+/// Same computation as the GPU path: one "dispatch" per chunk, each running the shader for every
+/// pixel, so given the same seed it produces the same accumulation (up to float differences).
 #[allow(dead_code)]
 fn render_cpu(
+    seed: u32,
     raytrace_settings: &RaytraceSettings,
     spheres: &[Sphere],
     bvh_nodes: &[BvhNode],
@@ -101,12 +124,12 @@ fn render_cpu(
 
     let mut output = vec![Vec4::ZERO; (screen_size.x * screen_size.y) as usize];
 
-    for _ in 0..raytrace_settings.amount_of_samples {
+    for params in dispatch_params(seed, raytrace_settings.amount_of_samples) {
         for y in 0..screen_size.y {
             for x in 0..screen_size.x {
                 shader::main(
                     UVec3 { x, y, z: 0 },
-                    &0,
+                    &params,
                     raytrace_settings,
                     spheres,
                     &mut output,
@@ -154,6 +177,8 @@ async fn main() {
     let mut rng = make_rng();
     let spheres = scene(&mut rng);
     let bvh_nodes = build_bvh(&spheres);
+    // Base seed for the shader's RNG; every sample's RNG is derived from it.
+    let seed = rng.random::<u32>();
 
     // Setup
     let instance = Instance::new(InstanceDescriptor {
@@ -191,11 +216,22 @@ async fn main() {
     let compute_shader_module = device.create_shader_module(shader);
 
     // Data
-    let seed_buffer = device.create_buffer(&BufferDescriptor {
-        label: Some("Seed buffer"),
-        size: size_of::<u32>() as u64,
-        mapped_at_creation: false,
-        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+    // Every dispatch's `DispatchParams`, each at its own aligned offset in one uniform buffer;
+    // dispatches select theirs with a dynamic offset.
+    let dispatches: Vec<DispatchParams> = dispatch_params(seed, amount_of_samples).collect();
+    let params_stride = (size_of::<DispatchParams>() as u32)
+        .next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
+    let mut params_bytes = vec![0u8; dispatches.len().max(1) * params_stride as usize];
+    for (params, chunk) in dispatches
+        .iter()
+        .zip(params_bytes.chunks_exact_mut(params_stride as usize))
+    {
+        chunk[..size_of::<DispatchParams>()].copy_from_slice(bytemuck::bytes_of(params));
+    }
+    let params_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("Dispatch params buffer"),
+        contents: &params_bytes,
+        usage: BufferUsages::UNIFORM,
     });
 
     let raytrace_settings_buffer = device.create_buffer_init(&BufferInitDescriptor {
@@ -239,8 +275,8 @@ async fn main() {
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                    has_dynamic_offset: true,
+                    min_binding_size: NonZero::new(size_of::<DispatchParams>() as u64),
                 },
                 count: None,
             },
@@ -308,7 +344,11 @@ async fn main() {
         entries: &[
             BindGroupEntry {
                 binding: 0,
-                resource: seed_buffer.as_entire_binding(),
+                resource: BindingResource::Buffer(BufferBinding {
+                    buffer: &params_buffer,
+                    offset: 0,
+                    size: NonZero::new(size_of::<DispatchParams>() as u64),
+                }),
             },
             BindGroupEntry {
                 binding: 1,
@@ -329,28 +369,30 @@ async fn main() {
         ],
     });
 
+    eprintln!(
+        "Samples: {amount_of_samples} in {} dispatches of up to {SAMPLES_PER_DISPATCH}",
+        dispatches.len()
+    );
+
+    // All dispatches go into one compute pass and one submission, and the CPU waits only once.
+    // Each dispatch reads and adds to `output`; wgpu inserts a storage barrier between dispatches
+    // that write the same buffer, so they accumulate in order.
     let time_started = Instant::now();
-    for i in 0..amount_of_samples {
-        eprintln!("Sample {i}");
-
-        let seed = rng.random::<u32>();
-        queue.write_buffer(&seed_buffer, 0, bytemuck::bytes_of(&seed));
-
-        let mut encoder = device.create_command_encoder(&Default::default());
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&Default::default());
-            compute_pass.set_pipeline(&compute_pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&Default::default());
+        compute_pass.set_pipeline(&compute_pipeline);
+        for i in 0..dispatches.len() as u32 {
+            compute_pass.set_bind_group(0, &bind_group, &[i * params_stride]);
             compute_pass.dispatch_workgroups(
                 screen_size.x.div_ceil(8),
                 screen_size.y.div_ceil(8),
                 1,
             );
         }
-
-        queue.submit([encoder.finish()]);
-        device.poll(PollType::wait_indefinitely()).unwrap();
     }
+    queue.submit([encoder.finish()]);
+    device.poll(PollType::wait_indefinitely()).unwrap();
 
     let elapsed_time = time_started.elapsed().as_secs_f32();
     eprintln!("Elapsed time: {elapsed_time:.3}");
@@ -375,16 +417,19 @@ async fn main() {
     let buffer_view = buffer_slice.get_mapped_range().unwrap();
     let output_data: &[[f32; 4]] = bytemuck::cast_slice(&buffer_view);
 
-    // Export to ppm
-    let mut output_ppm = String::new();
-    output_ppm += &format!("P3\n{} {}\n255\n", screen_size.x, screen_size.y);
+    // Export to png
+    // map from linear to gamma 2, then to 0..=255
+    let rgb: Vec<u8> = output_data
+        .iter()
+        .flat_map(|&[r, g, b, _]| [r, g, b])
+        .map(|c| f32::round(c.clamp(0., 1.).sqrt() * 255.) as u8)
+        .collect();
 
-    for pixel in output_data {
-        // map from linear to gamma 2, then to 0..=255
-        let [r, g, b, _] = pixel.map(|c| f32::round(c.sqrt() * 255.) as u8);
-
-        output_ppm += &format!("{r} {g} {b}\n");
-    }
-
-    fs::write("image.ppm", output_ppm).unwrap();
+    let file = BufWriter::new(File::create("render.png").unwrap());
+    let mut encoder = png::Encoder::new(file, screen_size.x, screen_size.y);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&rgb).unwrap();
+    writer.finish().unwrap();
 }

@@ -12,4 +12,4 @@ A compute shader raytracer written in Rust, compiled to SPIR-V with [rust-gpu](h
 cargo run --release
 ```
 
-This writes `image.ppm` to the working directory.
+This writes `render.png` to the working directory.

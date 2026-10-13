@@ -11,7 +11,7 @@ mod traits;
 use bytemuck::{Pod, Zeroable};
 use data::{Closest, Range, RayHit};
 use glam::{UVec2, Vec2, Vec3, Vec4};
-use rand::Rand;
+use rand::{Rand, hash_combine2};
 use ray::Ray;
 use spirv_std::{num_traits::Float, spirv};
 use traits::Raycastable;
@@ -39,6 +39,24 @@ const _: () = {
     assert!(core::mem::offset_of!(RaytraceSettings, screen_size) == 96);
     assert!(core::mem::offset_of!(RaytraceSettings, use_bvh) == 112);
 };
+
+/// Per-dispatch parameters (uniform, binding 0). The host splits `amount_of_samples` into chunks
+/// and records one dispatch per chunk; each invocation traces samples
+/// `sample_start..sample_start + sample_count` for its pixel.
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct DispatchParams {
+    /// Base seed for the whole render, identical for every dispatch. Each sample's RNG is derived
+    /// from `(pixel, seed, sample index)`, so the image doesn't depend on how samples are chunked
+    /// (up to float summation order).
+    pub seed: u32,
+    pub sample_start: u32,
+    pub sample_count: u32,
+    /// Pads the struct to 16 bytes, as uniform buffers require.
+    pub _padding: u32,
+}
+
+const _: () = assert!(size_of::<DispatchParams>() == 16);
 
 /// std430 (which naga and Vulkan apply to storage buffers) aligns every `vec3` to 16 bytes, but
 /// glam's `Vec3` is 12 bytes / align 4 in Rust. Each `Vec3` is therefore followed by explicit
@@ -157,40 +175,23 @@ fn defocus_sample_offset(rand: &mut Rand) -> Vec2 {
     rand.gen_in_unit_disk()
 }
 
-#[spirv(compute(threads(8, 8)))]
-pub fn main(
-    #[spirv(global_invocation_id)] pixel_position: UVec3,
-    #[spirv(uniform, descriptor_set = 0, binding = 0)] &seed: &u32,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] &raytrace_settings: &RaytraceSettings,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] spheres: &[Sphere],
-    // `Vec4` rather than `Vec3`: a std430 array of vec3 has a 16-byte stride, so use a type whose
-    // Rust size already is 16. `w` is unused.
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] output: &mut [Vec4],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] bvh_nodes: &[BvhNode],
-) {
-    let pixel_position = pixel_position.truncate();
+/// Traces one camera ray through `pixel_position` and returns its color.
+fn trace_sample(
+    pixel_position: UVec2,
+    raytrace_settings: &RaytraceSettings,
+    spheres: &[Sphere],
+    bvh_nodes: &[BvhNode],
+    rand: &mut Rand,
+) -> Vec3 {
+    let viewport = raytrace_settings.viewport;
 
-    let RaytraceSettings {
-        viewport,
-        screen_size,
-        amount_of_samples,
-        max_depth,
-        use_bvh,
-        ..
-    } = raytrace_settings;
-
-    if pixel_position.x >= screen_size.x || pixel_position.y >= screen_size.y {
-        return;
-    }
-
-    let mut rand = Rand::from(pixel_position.extend(seed));
-    let sample_position = pixel_position.as_vec2() + pixel_sample_offset(&mut rand);
+    let sample_position = pixel_position.as_vec2() + pixel_sample_offset(rand);
 
     let pixel_center = viewport.upper_left_pixel_position
         + sample_position.x * viewport.horizontal_pixel_delta
         + sample_position.y * viewport.vertical_pixel_delta;
 
-    let defocus_offset = defocus_sample_offset(&mut rand);
+    let defocus_offset = defocus_sample_offset(rand);
     let ray_origin = viewport.origin
         + defocus_offset.x * viewport.horizontal_defocus_disk
         + defocus_offset.y * viewport.vertical_defocus_disk;
@@ -202,8 +203,57 @@ pub fn main(
         direction: ray_direction,
     };
 
-    let color = ray_color(ray, spheres, bvh_nodes, use_bvh != 0, max_depth, &mut rand);
+    ray_color(
+        ray,
+        spheres,
+        bvh_nodes,
+        raytrace_settings.use_bvh != 0,
+        raytrace_settings.max_depth,
+        rand,
+    )
+}
+
+/// One invocation per pixel. Traces samples `sample_start..sample_start + sample_count` and adds
+/// their sum, weighted by `1 / amount_of_samples`, into `output` with a single read-modify-write.
+/// Successive dispatches accumulate into the same buffer, so `output` holds the final average once
+/// all `amount_of_samples` samples have been dispatched.
+#[spirv(compute(threads(8, 8)))]
+pub fn main(
+    #[spirv(global_invocation_id)] pixel_position: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] dispatch_params: &DispatchParams,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] raytrace_settings: &RaytraceSettings,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] spheres: &[Sphere],
+    // `Vec4` rather than `Vec3`: a std430 array of vec3 has a 16-byte stride, so use a type whose
+    // Rust size already is 16. `w` is unused.
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] output: &mut [Vec4],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] bvh_nodes: &[BvhNode],
+) {
+    let pixel_position = pixel_position.truncate();
+    let screen_size = raytrace_settings.screen_size;
+
+    if pixel_position.x >= screen_size.x || pixel_position.y >= screen_size.y {
+        return;
+    }
+
+    let DispatchParams {
+        seed,
+        sample_start,
+        sample_count,
+        ..
+    } = *dispatch_params;
+
+    let mut color_sum = Vec3::ZERO;
+    for sample in sample_start..sample_start + sample_count {
+        let mut rand = Rand::from(pixel_position.extend(hash_combine2(seed, sample)));
+        color_sum += trace_sample(
+            pixel_position,
+            raytrace_settings,
+            spheres,
+            bvh_nodes,
+            &mut rand,
+        );
+    }
 
     output[(pixel_position.y * screen_size.x + pixel_position.x) as usize] +=
-        (color / (amount_of_samples as f32)).extend(0.);
+        (color_sum / (raytrace_settings.amount_of_samples as f32)).extend(0.);
 }
