@@ -46,7 +46,7 @@ impl Rand {
         Self { current: seed }
     }
 
-    pub fn gen(&mut self) -> u32 {
+    pub fn next_u32(&mut self) -> u32 {
         let next = hash1(self.current);
         self.current = next;
 
@@ -54,7 +54,7 @@ impl Rand {
     }
 
     pub fn gen_float(&mut self) -> f32 {
-        let rand = self.gen();
+        let rand = self.next_u32();
 
         uint_to_u01_float(rand)
     }

@@ -1,4 +1,4 @@
-use rand::{thread_rng, Rng};
+use rand::RngExt;
 use shader::{Material, Sphere};
 use vek::Vec3;
 
@@ -33,23 +33,23 @@ pub fn scene() -> Vec<Sphere> {
         material: Material::metal(Vec3::new(0.7, 0.6, 0.5), 0.),
     });
 
-    let rng = &mut thread_rng();
+    let rng = &mut rand::rng();
 
     for a in -11..11 {
         for b in -11..11 {
-            let choose_material = rng.gen::<f32>();
+            let choose_material = rng.random::<f32>();
 
             let center = Vec3::new(
-                a as f32 + 0.9 * rng.gen::<f32>(),
+                a as f32 + 0.9 * rng.random::<f32>(),
                 0.2,
-                b as f32 + 0.9 * rng.gen::<f32>(),
+                b as f32 + 0.9 * rng.random::<f32>(),
             );
 
             if center.distance(Vec3::new(4., 0.2, 0.)) > 0.9 {
                 if choose_material < 0.8 {
                     // Diffuse
 
-                    let mut random = || rng.gen::<f32>();
+                    let mut random = || rng.random::<f32>();
                     let albedo = Vec3::new(
                         random() * random(),
                         random() * random(),
@@ -63,9 +63,9 @@ pub fn scene() -> Vec<Sphere> {
                     });
                 } else if choose_material < 0.95 {
                     // Metal
-                    let mut random = || rng.gen_range(0.5..1.);
+                    let mut random = || rng.random_range(0.5..1.);
                     let albedo = Vec3::new(random(), random(), random());
-                    let fuzz = rng.gen_range(0. ..0.5);
+                    let fuzz = rng.random_range(0. ..0.5);
 
                     spheres.push(Sphere {
                         center,

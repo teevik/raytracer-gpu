@@ -15,17 +15,16 @@
       ];
 
       perSystem =
-        { pkgs, ... }:
+        { pkgs, lib, ... }:
         {
           devShells.default = pkgs.mkShell {
             packages = with pkgs; [
+              rustup
               vulkan-loader
-              stdenv.cc.cc
-              xorg.libX11
-              xorg.libXcursor
-              xorg.libXi
-              xorg.libXrandr
             ];
+
+            # wgpu/ash dlopen libvulkan at runtime, so it has to be on the library path
+            env.LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.vulkan-loader ];
           };
         };
     };

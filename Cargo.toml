@@ -1,10 +1,26 @@
 [workspace]
-resolver = "2"
-members = [
-  "runner",
-  "shader"
-]
+resolver = "3"
+members = ["runner", "shader"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_arch, values("spirv"))'] }
 
 [workspace.dependencies]
-bytemuck = { version = "1.14", features = ["derive"] }
-vek = { version = "0.16", default-features = false, features = ["rgb", "bytemuck", "libm"] }
+# rust-gpu. Keep cargo-gpu-install and spirv-std on the same version.
+cargo-gpu-install = "0.10.0"
+spirv-std = "0.10.0"
+
+# math
+bytemuck = { version = "1.25", features = ["derive"] }
+vek = { version = "0.17", default-features = false, features = ["rgb", "bytemuck", "libm"] }
+
+# host
+wgpu = { version = "30.0", features = ["spirv"] }
+pollster = { version = "1.0", features = ["macro"] }
+env_logger = "0.11"
+rand = "0.10"
+anyhow = "1.0"

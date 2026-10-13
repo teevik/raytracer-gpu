@@ -1,18 +1,16 @@
 mod scene;
 
-use bevy_utils::default;
-use rand::{thread_rng, Rng};
+use rand::RngExt;
 use scene::scene;
 use shader::{RaytraceSettings, Sphere, UVec3, Viewport};
-use std::{fs, mem::size_of, time::Instant};
-use vek::{num_traits::Float, Vec2, Vec3};
+use std::{fs, mem::size_of, sync::mpsc, time::Instant};
+use vek::{Vec2, Vec3, num_traits::Float};
 use wgpu::{
-    include_spirv,
-    util::{BufferInitDescriptor, DeviceExt},
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingType, BufferBindingType, BufferDescriptor, BufferUsages, ComputePipelineDescriptor,
-    DeviceDescriptor, Features, Instance, InstanceDescriptor, Maintain, PipelineLayoutDescriptor,
-    ShaderStages,
+    DeviceDescriptor, ExperimentalFeatures, Features, Instance, InstanceDescriptor, MapMode,
+    PipelineLayoutDescriptor, PollType, ShaderStages, include_spirv,
+    util::{BufferInitDescriptor, DeviceExt},
 };
 
 pub struct Camera {
@@ -91,7 +89,7 @@ fn render_cpu(raytrace_settings: &RaytraceSettings, spheres: &[Sphere]) -> Vec<V
 async fn main() {
     env_logger::init();
 
-    let shader = include_spirv!(env!("shader.spv"));
+    let shader = include_spirv!(env!("SHADER_SPV_PATH"));
 
     let camera = Camera {
         position: Vec3::new(13., 2., 3.),
@@ -121,23 +119,24 @@ async fn main() {
     // Setup
     let instance = Instance::new(InstanceDescriptor {
         backends: Backends::PRIMARY,
-        ..default()
+        ..InstanceDescriptor::new_without_display_handle_from_env()
     });
 
     let adapter = instance
-        .request_adapter(&default())
+        .request_adapter(&Default::default())
         .await
         .expect("No adapter");
+    eprintln!("Using adapter: {}", adapter.get_info().name);
 
     let (device, queue) = adapter
-        .request_device(
-            &DeviceDescriptor {
-                label: Some("Device"),
-                features: Features::MAPPABLE_PRIMARY_BUFFERS,
-                limits: default(),
-            },
-            None,
-        )
+        .request_device(&DeviceDescriptor {
+            label: Some("Device"),
+            required_features: Features::MAPPABLE_PRIMARY_BUFFERS,
+            required_limits: Default::default(),
+            experimental_features: ExperimentalFeatures::disabled(),
+            memory_hints: Default::default(),
+            trace: Default::default(),
+        })
         .await
         .unwrap();
 
@@ -218,15 +217,17 @@ async fn main() {
 
     let compute_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Compute pipeline layout"),
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
     });
 
     let compute_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
         label: Some("Compute pipeline"),
         layout: Some(&compute_pipeline_layout),
         module: &compute_shader_module,
-        entry_point: "main",
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
     });
 
     let bind_group = device.create_bind_group(&BindGroupDescriptor {
@@ -252,25 +253,25 @@ async fn main() {
         ],
     });
 
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
 
     let time_started = Instant::now();
     for i in 0..amount_of_samples {
         eprintln!("Sample {i}");
 
-        let seed = rng.gen::<u32>();
+        let seed = rng.random::<u32>();
         queue.write_buffer(&seed_buffer, 0, bytemuck::bytes_of(&seed));
 
-        let mut encoder = device.create_command_encoder(&default());
+        let mut encoder = device.create_command_encoder(&Default::default());
         {
-            let mut compute_pass = encoder.begin_compute_pass(&default());
+            let mut compute_pass = encoder.begin_compute_pass(&Default::default());
             compute_pass.set_pipeline(&compute_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch_workgroups(screen_size[0], screen_size[1], 1);
+            compute_pass.dispatch_workgroups(screen_size.x.div_ceil(8), screen_size.y.div_ceil(8), 1);
         }
 
         queue.submit([encoder.finish()]);
-        device.poll(wgpu::MaintainBase::Wait);
+        device.poll(PollType::wait_indefinitely()).unwrap();
     }
 
     let elapsed_time = time_started.elapsed().as_secs_f32();
@@ -278,20 +279,19 @@ async fn main() {
 
     let buffer_slice = output_buffer.slice(..);
 
-    let (sender, receiver) = flume::bounded(1);
-    buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+    let (sender, receiver) = mpsc::channel();
+    buffer_slice.map_async(MapMode::Read, move |v| sender.send(v).unwrap());
 
-    // Poll device to let it run the compute shader
-    device.poll(Maintain::Wait);
+    // Poll device so the map request completes
+    device.poll(PollType::wait_indefinitely()).unwrap();
 
     receiver
-        .recv_async()
-        .await
-        .expect("Flume")
+        .recv()
+        .expect("Map callback dropped")
         .expect("Buffer map error");
 
-    let buffer_view = buffer_slice.get_mapped_range();
-    let output_data: &[Vec3<f32>] = bytemuck::cast_slice(&*buffer_view);
+    let buffer_view = buffer_slice.get_mapped_range().unwrap();
+    let output_data: &[Vec3<f32>] = bytemuck::cast_slice(&buffer_view);
 
     // Export to ppm
     let mut output_ppm = String::new();

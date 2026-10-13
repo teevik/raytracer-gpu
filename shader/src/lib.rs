@@ -1,5 +1,6 @@
 #![no_std]
 
+#[allow(dead_code, unused_variables, unused_mut)] // work in progress, not wired in yet
 mod bvh;
 mod data;
 mod material;
@@ -105,7 +106,7 @@ fn defocus_sample_offset(rand: &mut Rand) -> Vec2<f32> {
     rand.gen_in_unit_disk()
 }
 
-#[spirv(compute(threads(1)))]
+#[spirv(compute(threads(8, 8)))]
 pub fn main(
     #[spirv(global_invocation_id)] pixel_position: glam::UVec3,
     #[spirv(uniform, descriptor_set = 0, binding = 0)] &seed: &u32,
@@ -121,6 +122,10 @@ pub fn main(
         amount_of_samples,
         max_depth,
     } = raytrace_settings;
+
+    if pixel_position.x >= screen_size.x || pixel_position.y >= screen_size.y {
+        return;
+    }
 
     let mut rand = Rand::from(pixel_position.with_z(seed));
     let sample_position = pixel_position.as_::<f32>() + pixel_sample_offset(&mut rand);

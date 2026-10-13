@@ -1,13 +1,12 @@
 [package]
 name = "shader"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
-[lib]
-crate-type = ["lib", "dylib"]
+[lints]
+workspace = true
 
 [dependencies]
+spirv-std.workspace = true
 bytemuck.workspace = true
 vek.workspace = true
-
-spirv-std = "0.9"

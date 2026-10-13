@@ -3,12 +3,12 @@ use spirv_std::num_traits::Float;
 use vek::Vec3;
 
 use crate::{
+    RayHit,
     bvh::Aabb,
     data::{Face, Range},
     material::Material,
     ray::Ray,
     traits::Raycastable,
-    RayHit,
 };
 
 #[derive(Clone, Copy, Zeroable, Pod)]

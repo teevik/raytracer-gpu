@@ -1,17 +1,27 @@
-use spirv_builder::{MetadataPrintout, SpirvBuilder};
+use cargo_gpu_install::install::Install;
+use cargo_gpu_install::spirv_builder::{ShaderPanicStrategy, SpirvMetadata};
+use std::path::PathBuf;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if cfg!(target_os = "linux") {
-        println!("cargo:rustc-link-lib=X11");
-        println!("cargo:rustc-link-lib=Xcursor");
-        println!("cargo:rustc-link-lib=Xrandr");
-        println!("cargo:rustc-link-lib=Xi");
-        println!("cargo:rustc-link-lib=vulkan");
-    }
+fn main() -> anyhow::Result<()> {
+    let shader_crate = [env!("CARGO_MANIFEST_DIR"), "..", "shader"]
+        .iter()
+        .collect::<PathBuf>();
 
-    SpirvBuilder::new("../shader", "spirv-unknown-spv1.3")
-        .print_metadata(MetadataPrintout::Full)
-        .build()?;
+    // Installs the nightly toolchain rust-gpu needs (via rustup) and builds the
+    // `rustc_codegen_spirv` backend into ~/.cache/rust-gpu. Both are cached and
+    // keyed on the spirv-std version used by the shader crate.
+    let mut install = Install::from_shader_crate(shader_crate.clone()).within_build_script();
+    install.auto_install_rust_toolchain = true;
+    let backend = install.run()?;
+
+    let mut builder = backend.to_spirv_builder(shader_crate, "spirv-unknown-vulkan1.2");
+    builder.build_script.defaults = true;
+    builder.shader_panic_strategy = ShaderPanicStrategy::SilentExit;
+    builder.spirv_metadata = SpirvMetadata::NameVariables;
+
+    let result = builder.build()?;
+    let spv_path = result.module.unwrap_single();
+    println!("cargo::rustc-env=SHADER_SPV_PATH={}", spv_path.display());
 
     Ok(())
 }

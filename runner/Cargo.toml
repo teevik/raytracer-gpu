@@ -1,25 +1,22 @@
 [package]
 name = "runner"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
-shader = { path =  "../shader" }
+shader = { path = "../shader" }
 bytemuck.workspace = true
 vek.workspace = true
 
-wgpu = { version = "0.18", features = ["spirv"] }
-env_logger = "0.10"
-pollster = { version = "0.3", features = ["macro"] }
-bevy_utils = "0.12"
-flume = "0.11"
-rand = "0.8"
+wgpu.workspace = true
+pollster.workspace = true
+env_logger.workspace = true
+rand.workspace = true
 
 [build-dependencies]
-spirv-builder = "0.9"
-
-[profile.release.build-override]
-opt-level = 3
-codegen-units = 16
-[profile.dev.build-override]
-opt-level = 3
+cargo-gpu-install.workspace = true
+anyhow.workspace = true
