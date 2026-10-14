@@ -3,10 +3,10 @@ mod scene;
 
 use bvh::build_bvh;
 use bytemuck::Zeroable;
-use clap::{builder::BoolishValueParser, ArgAction, Parser};
+use clap::{ArgAction, Parser, builder::BoolishValueParser};
 use glam::{UVec2, Vec3, Vec4};
 use indicatif::{ProgressBar, ProgressStyle};
-use rand::{rngs::StdRng, Rng, RngExt, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use scene::scene;
 use shader::{BvhNode, DispatchParams, RaytraceSettings, Sphere, UVec3, Viewport};
 use std::{
@@ -14,12 +14,11 @@ use std::{
     time::Instant,
 };
 use wgpu::{
-    include_spirv,
-    util::{BufferInitDescriptor, DeviceExt},
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingResource, BindingType, BufferBinding, BufferBindingType, BufferDescriptor, BufferUsages,
     ComputePipelineDescriptor, DeviceDescriptor, ExperimentalFeatures, Features, Instance,
-    InstanceDescriptor, MapMode, PipelineLayoutDescriptor, PollType, ShaderStages,
+    InstanceDescriptor, MapMode, PipelineLayoutDescriptor, PollType, ShaderStages, include_spirv,
+    util::{BufferInitDescriptor, DeviceExt},
 };
 
 pub struct Camera {
