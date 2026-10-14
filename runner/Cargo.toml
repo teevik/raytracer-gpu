@@ -17,7 +17,7 @@ wgpu.workspace = true
 pollster.workspace = true
 env_logger.workspace = true
 rand.workspace = true
-png.workspace = true
+image.workspace = true
 clap.workspace = true
 indicatif.workspace = true
 

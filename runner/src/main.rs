@@ -5,14 +5,12 @@ use bvh::build_bvh;
 use bytemuck::Zeroable;
 use clap::{ArgAction, Parser, builder::BoolishValueParser};
 use glam::{UVec2, Vec3, Vec4};
+use image::{ImageFormat, RgbImage};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use scene::scene;
 use shader::{BvhNode, DispatchParams, RaytraceSettings, Sphere, UVec3, Viewport};
-use std::{
-    fs::File, io::BufWriter, mem::size_of, num::NonZero, path::PathBuf, str::FromStr, sync::mpsc,
-    time::Instant,
-};
+use std::{mem::size_of, num::NonZero, path::PathBuf, str::FromStr, sync::mpsc, time::Instant};
 use wgpu::{
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingResource, BindingType, BufferBinding, BufferBindingType, BufferDescriptor, BufferUsages,
@@ -466,11 +464,8 @@ async fn main() {
         .map(|c| f32::round(c.clamp(0., 1.).sqrt() * 255.) as u8)
         .collect();
 
-    let file = BufWriter::new(File::create(&args.output).unwrap());
-    let mut encoder = png::Encoder::new(file, screen_size.x, screen_size.y);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().unwrap();
-    writer.write_image_data(&rgb).unwrap();
-    writer.finish().unwrap();
+    RgbImage::from_raw(screen_size.x, screen_size.y, rgb)
+        .expect("Image buffer size mismatch")
+        .save_with_format(&args.output, ImageFormat::Png)
+        .unwrap();
 }
