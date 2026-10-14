@@ -4,18 +4,22 @@ use glam::{UVec2, UVec3, Vec2, Vec3};
 use spirv_std::num_traits::Float;
 
 pub fn hash1(mut x: u32) -> u32 {
-    x += x << 10;
+    x = x.wrapping_add(x << 10);
     x ^= x >> 6;
-    x += x << 3;
+    x = x.wrapping_add(x << 3);
     x ^= x >> 11;
-    x += x << 15;
+    x = x.wrapping_add(x << 15);
     x
 }
 
 pub fn hash_combine2(x: u32, y: u32) -> u32 {
     const M: u32 = 1664525;
     const C: u32 = 1013904223;
-    let mut seed = (x * M + y + C) * M;
+    let mut seed = x
+        .wrapping_mul(M)
+        .wrapping_add(y)
+        .wrapping_add(C)
+        .wrapping_mul(M);
     // Tempering (from Matsumoto)
     seed ^= seed >> 11;
     seed ^= (seed << 7) & 0x9d2c5680;
