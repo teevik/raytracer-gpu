@@ -28,9 +28,7 @@ pub struct RaytraceSettings {
     pub screen_size: UVec2,
     pub amount_of_samples: u32,
     pub max_depth: u32,
-    /// Nonzero: traverse the BVH. Zero: test every sphere (brute force, for comparison).
     pub use_bvh: u32,
-    /// Pads the struct to a multiple of 16 bytes, as std430 requires.
     pub _padding: [u32; 3],
 }
 
@@ -40,27 +38,18 @@ const _: () = {
     assert!(core::mem::offset_of!(RaytraceSettings, use_bvh) == 112);
 };
 
-/// Per-dispatch parameters (uniform, binding 0). The host splits `amount_of_samples` into chunks
-/// and records one dispatch per chunk; each invocation traces samples
-/// `sample_start..sample_start + sample_count` for its pixel.
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct DispatchParams {
-    /// Base seed for the whole render, identical for every dispatch. Each sample's RNG is derived
-    /// from `(pixel, seed, sample index)`, so the image doesn't depend on how samples are chunked
-    /// (up to float summation order).
     pub seed: u32,
     pub sample_start: u32,
     pub sample_count: u32,
-    /// Pads the struct to 16 bytes, as uniform buffers require.
     pub _padding: u32,
 }
 
 const _: () = assert!(size_of::<DispatchParams>() == 16);
 
-/// std430 (which naga and Vulkan apply to storage buffers) aligns every `vec3` to 16 bytes, but
-/// glam's `Vec3` is 12 bytes / align 4 in Rust. Each `Vec3` is therefore followed by explicit
-/// padding so the Rust and GPU layouts agree. Construct with `..Zeroable::zeroed()`.
+/// std430 aligns `vec3` to 16 bytes, hence the padding
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct Viewport {
@@ -80,12 +69,10 @@ pub struct Viewport {
     pub _padding5: f32,
 }
 
-/// Brute force: tests every sphere.
 fn closest_sphere(spheres: &[Sphere], ray: Ray, range: Range) -> Closest {
     let mut closest = Closest::none(range.max);
 
-    // Indexing rather than `iter().enumerate()`: rust-gpu can't compile slice iterators
-    // ("cannot convert pointers to integers").
+    // rust-gpu can't compile slice iterators
     #[allow(clippy::needless_range_loop)]
     for i in 0..spheres.len() {
         let distance = spheres[i].intersect_distance(ray, Range::new(range.min, closest.distance));
@@ -175,7 +162,6 @@ fn defocus_sample_offset(rand: &mut Rand) -> Vec2 {
     rand.gen_in_unit_disk()
 }
 
-/// Traces one camera ray through `pixel_position` and returns its color.
 fn trace_sample(
     pixel_position: UVec2,
     raytrace_settings: &RaytraceSettings,
@@ -213,18 +199,13 @@ fn trace_sample(
     )
 }
 
-/// One invocation per pixel. Traces samples `sample_start..sample_start + sample_count` and adds
-/// their sum, weighted by `1 / amount_of_samples`, into `output` with a single read-modify-write.
-/// Successive dispatches accumulate into the same buffer, so `output` holds the final average once
-/// all `amount_of_samples` samples have been dispatched.
 #[spirv(compute(threads(8, 8)))]
 pub fn main(
     #[spirv(global_invocation_id)] pixel_position: UVec3,
     #[spirv(uniform, descriptor_set = 0, binding = 0)] dispatch_params: &DispatchParams,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] raytrace_settings: &RaytraceSettings,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] spheres: &[Sphere],
-    // `Vec4` rather than `Vec3`: a std430 array of vec3 has a 16-byte stride, so use a type whose
-    // Rust size already is 16. `w` is unused.
+    // `Vec4` to match the 16-byte std430 stride, `w` is unused
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] output: &mut [Vec4],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] bvh_nodes: &[BvhNode],
 ) {

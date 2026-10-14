@@ -8,10 +8,7 @@ use obvhs::{
 };
 use shader::{Aabb, BvhNode, Sphere};
 
-/// Builds a BVH over `spheres` with one sphere per leaf.
-///
-/// obvhs builds the tree (PLOC plus reinsertion), then it is flattened into the depth-first
-/// exit-index layout the shader walks without a stack.
+/// Builds a BVH over `spheres` with one sphere per leaf, flattened into the layout the shader walks.
 pub fn build_bvh(spheres: &[Sphere]) -> Vec<BvhNode> {
     if spheres.is_empty() {
         return Vec::new();
@@ -25,10 +22,8 @@ pub fn build_bvh(spheres: &[Sphere]) -> Vec<BvhNode> {
         })
         .collect();
 
-    // The slowest preset still builds this scene in well under a millisecond, and on the GPU it
-    // traces measurably faster than the medium preset.
+    // Slowest preset still builds in under a millisecond and traces faster on the GPU
     let params = BvhBuildParams {
-        // The shader's leaves hold exactly one sphere
         max_prims_per_leaf: 1,
         ..BvhBuildParams::very_slow_build()
     };
@@ -57,12 +52,10 @@ fn flatten(bvh: &Bvh2, index: u32, nodes: &mut Vec<BvhNode>) {
         return;
     }
 
-    // Placeholder, the exit index is only known once the subtree is flattened
+    // Exit index is patched in once the subtree is flattened
     nodes.push(BvhNode::interior(bounds, 0));
 
-    // The shader always visits the first child first, and obvhs leaves child order arbitrary.
-    // Ordering children spatially along the parent's longest axis keeps neighbouring rays on
-    // similar paths, which made traversal noticeably faster on the GPU.
+    // Order children along the longest axis so neighbouring rays take similar paths
     let (mut first, mut second) = (node.first_index, node.first_index + 1);
     let axis = aabb.largest_axis();
     if bvh.nodes[first as usize].aabb().center_axis(axis)
@@ -83,8 +76,6 @@ mod tests {
     use crate::scene::scene;
     use rand::{SeedableRng, rngs::StdRng};
 
-    /// Every sphere appears in exactly one leaf, children lie inside their parent, and the exit
-    /// links describe a valid depth-first layout.
     #[test]
     fn structure_is_valid() {
         let spheres = scene(&mut StdRng::seed_from_u64(1));

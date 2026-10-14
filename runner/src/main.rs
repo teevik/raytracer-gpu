@@ -125,17 +125,10 @@ fn make_rng(seed: Seed) -> Box<dyn Rng> {
     }
 }
 
-/// Samples traced per pixel by one dispatch. Every dispatch is queued before the CPU waits, so this
-/// doesn't add CPU/GPU syncs; it trades two GPU-side costs. Small chunks pay a barrier, a submission
-/// and an `output` read-modify-write per dispatch, while large chunks leave the GPU waiting on the
-/// slowest (e.g. glass-heavy) workgroups at the end of each long dispatch. On an RTX 4090, 8-16 was
-/// fastest, 1 was ~15% slower and 64 ~10% slower (measured with all dispatches in one submission).
-/// It also bounds how long one dispatch runs (~6 ms here), keeping slow GPUs far from driver
-/// watchdogs (TDR, ~2 s on Windows), and sets the progress bar's granularity. The float summation
-/// order depends on it, so changing it changes the image at noise level.
+/// Samples traced per pixel by one dispatch. 8-16 was fastest on an RTX 4090, and it keeps each
+/// dispatch short enough to stay clear of driver watchdogs.
 const SAMPLES_PER_DISPATCH: u32 = 16;
 
-/// Splits `amount_of_samples` into the per-dispatch parameters, in order.
 fn dispatch_params(seed: u32, amount_of_samples: u32) -> impl Iterator<Item = DispatchParams> {
     (0..amount_of_samples)
         .step_by(SAMPLES_PER_DISPATCH as usize)
@@ -147,8 +140,6 @@ fn dispatch_params(seed: u32, amount_of_samples: u32) -> impl Iterator<Item = Di
         })
 }
 
-/// Same computation as the GPU path: one "dispatch" per chunk, each running the shader for every
-/// pixel, so given the same seed it produces the same accumulation (up to float differences).
 #[allow(dead_code)]
 fn render_cpu(
     seed: u32,
@@ -214,7 +205,6 @@ async fn main() {
     let mut rng = make_rng(args.seed);
     let spheres = scene(&mut rng);
     let bvh_nodes = build_bvh(&spheres);
-    // Base seed for the shader's RNG; every sample's RNG is derived from it.
     let seed = rng.random::<u32>();
 
     // Setup
@@ -253,8 +243,7 @@ async fn main() {
     let compute_shader_module = device.create_shader_module(shader);
 
     // Data
-    // Every dispatch's `DispatchParams`, each at its own aligned offset in one uniform buffer;
-    // dispatches select theirs with a dynamic offset.
+    // One aligned `DispatchParams` per dispatch, selected with a dynamic offset
     let dispatches: Vec<DispatchParams> = dispatch_params(seed, amount_of_samples).collect();
     let params_stride = (size_of::<DispatchParams>() as u32)
         .next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
@@ -416,10 +405,7 @@ async fn main() {
             .unwrap(),
     );
 
-    // Each dispatch gets its own submission, and all of them are queued before the CPU waits, so
-    // the GPU never idles between dispatches. Waiting on each submission in order then advances
-    // the progress bar as dispatches finish. Each dispatch reads and adds to `output`; wgpu inserts
-    // a storage barrier between dispatches that write the same buffer, so they accumulate in order.
+    // Queue every dispatch up front, then wait on each in turn to drive the progress bar
     let time_started = Instant::now();
     let submissions: Vec<_> = (0..)
         .zip(&dispatches)

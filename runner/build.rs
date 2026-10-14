@@ -7,9 +7,7 @@ fn main() -> anyhow::Result<()> {
         .iter()
         .collect::<PathBuf>();
 
-    // Installs the nightly toolchain rust-gpu needs (via rustup) and builds the
-    // `rustc_codegen_spirv` backend into ~/.cache/rust-gpu. Both are cached and
-    // keyed on the spirv-std version used by the shader crate.
+    // Installs rust-gpu's nightly toolchain and builds the codegen backend into ~/.cache/rust-gpu
     let mut install = Install::from_shader_crate(shader_crate.clone()).within_build_script();
     install.auto_install_rust_toolchain = true;
     let backend = install.run()?;

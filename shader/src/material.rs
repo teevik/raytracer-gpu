@@ -20,10 +20,7 @@ pub enum Reflection {
 unsafe impl Zeroable for Reflection {}
 unsafe impl Pod for Reflection {}
 
-/// Shared with the host through the sphere storage buffer. naga and Vulkan use std430 here, where
-/// a `vec3` is 16-byte aligned and a struct containing one is padded to a multiple of 16, while
-/// glam's `Vec3` is 12 bytes / align 4 in Rust. `albedo` goes first so it sits at offset 0, and
-/// the explicit trailing padding makes the Rust size (32) match the std430 size.
+/// Padded to match the std430 size
 #[derive(Clone, Copy, Default, Zeroable, Pod)]
 #[repr(C)]
 pub struct Material {

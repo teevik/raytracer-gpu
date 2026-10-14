@@ -1,5 +1,4 @@
 use glam::Vec3;
-use spirv_std::num_traits::Float;
 
 use crate::{material::Material, ray::Ray};
 
@@ -17,21 +16,8 @@ impl Range {
         }
     }
 
-    pub fn combine(a: Self, b: Self) -> Self {
-        Self::new(Float::min(a.min, b.min), Float::max(a.max, b.max))
-    }
-
     pub fn contains(self, value: f32) -> bool {
         value >= self.min && value < self.max
-    }
-
-    pub fn expand(self, delta: f32) -> Range {
-        let padding = delta / 2.;
-
-        Range {
-            min: self.min - padding,
-            max: self.max + padding,
-        }
     }
 }
 
@@ -69,11 +55,8 @@ impl RayHit {
     }
 }
 
-/// Result of a closest-hit search: just the sphere index and distance, so the search loops don't
-/// copy a full `RayHit` per candidate. The `RayHit` is computed once afterwards.
 #[derive(Clone, Copy)]
 pub struct Closest {
-    /// Index into the sphere buffer, `Closest::NO_HIT` if nothing was hit.
     pub index: u32,
     pub distance: f32,
 }
@@ -89,10 +72,8 @@ impl Closest {
     }
 }
 
-// rust-gpu decorates even function-local structs with their Rust member offsets, and naga (in
-// wgpu) treats a struct containing a `vec3` as 16-byte aligned with its size rounded up to 16.
-// `Ray` is 24 bytes in Rust but 32 to naga, so any member placed right after it "overlaps" and the
-// module is rejected. `repr(C)` with `scattered` last keeps rustc from reordering it into that spot.
+// naga sees `Ray` as 32 bytes (Rust: 24), so it has to stay the last member or naga
+// rejects the overlapping offsets
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub struct ScatterResult {

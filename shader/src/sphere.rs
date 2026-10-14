@@ -11,8 +11,7 @@ use crate::{
     traits::Raycastable,
 };
 
-/// Element of the sphere storage buffer. `radius` fills the 4 bytes after `center`, so `material`
-/// lands on the 16-byte boundary std430 requires and the array stride is 48 on both sides.
+/// `radius` fills the padding after `center`, keeping `material` 16-byte aligned for std430
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct Sphere {
@@ -32,12 +31,8 @@ impl Sphere {
 
         Aabb::from_extremes(self.center - radius, self.center + radius)
     }
-}
 
-impl Sphere {
-    /// Distance to the nearest intersection inside `range`, or `f32::MAX` on a miss (naga rejects
-    /// infinite float literals). Cheap enough for the closest-hit search loops, which never build
-    /// a `RayHit`.
+    /// `f32::MAX` on a miss, since naga rejects infinite float literals
     pub fn intersect_distance(self, ray: Ray, range: Range) -> f32 {
         let center_to_origin = ray.origin - self.center;
         let a = ray.direction.length_squared();
@@ -67,8 +62,6 @@ impl Sphere {
 
 impl Raycastable for Sphere {
     fn raycast(self, ray: Ray, range: Range) -> RayHit {
-        // Shares the root computation with `intersect_distance`, so the distance found by a
-        // closest-hit search is reproduced exactly here.
         let distance = self.intersect_distance(ray, range);
         if !range.contains(distance) {
             return RayHit::none();

@@ -8,7 +8,6 @@ use crate::{
     sphere::Sphere,
 };
 
-/// Axis-aligned bounding box. Each axis spans `min[axis]..max[axis]`.
 #[derive(Clone, Copy)]
 pub struct Aabb {
     pub min: Vec3,
@@ -24,7 +23,6 @@ impl Aabb {
     }
 }
 
-/// A ray prepared for repeated slab tests: `inverse_direction` is computed once per ray.
 #[derive(Clone, Copy)]
 pub struct SlabRay {
     pub origin: Vec3,
@@ -33,10 +31,7 @@ pub struct SlabRay {
 
 impl SlabRay {
     pub fn new(ray: Ray) -> Self {
-        // A zero direction component would give `inf` here and `0 * inf = NaN` in the slab test
-        // when the origin lies exactly on a slab plane. Nudging it to a tiny same-signed value
-        // keeps every product finite (|slab| * 1e30 stays far below `f32::MAX`) while still
-        // behaving like an axis-parallel ray.
+        // Avoids `0 * inf = NaN` in the slab test when a direction component is zero
         fn safe(direction: f32) -> f32 {
             const EPSILON: f32 = 1e-30;
 
@@ -56,7 +51,6 @@ impl SlabRay {
         }
     }
 
-    /// Slab test: does the ray overlap `min..max` anywhere inside `range`?
     pub fn hits(self, min: Vec3, max: Vec3, range: Range) -> bool {
         let t0 = (min - self.origin) * self.inverse_direction;
         let t1 = (max - self.origin) * self.inverse_direction;
@@ -68,17 +62,12 @@ impl SlabRay {
     }
 }
 
-/// Element of the BVH storage buffer, shared with the host.
-///
-/// Nodes are stored depth first, so an interior node's first child is always the next node.
-/// Traversal is stackless: visit `index + 1` when the box is hit (or after a leaf), and jump to
-/// `exit_index` (the node after this node's whole subtree) when it is missed. Each `Vec3` is
-/// followed by a `u32` so the Rust layout matches std430 (32 bytes, 16-byte aligned fields).
+/// Nodes are stored depth first. Traversal visits `index + 1` on a hit and jumps to `exit_index`
+/// (the node after this subtree) on a miss.
 #[derive(Clone, Copy, Zeroable, Pod)]
 #[repr(C)]
 pub struct BvhNode {
     pub min: Vec3,
-    /// Index of the first node after this node's subtree.
     pub exit_index: u32,
     pub max: Vec3,
     /// `sphere_index + 1` for a leaf (one sphere per leaf), `0` for an interior node.
@@ -112,7 +101,6 @@ impl BvhNode {
     }
 }
 
-/// Finds the closest sphere along `ray` within `range` by walking the BVH.
 pub fn closest_sphere(nodes: &[BvhNode], spheres: &[Sphere], ray: Ray, range: Range) -> Closest {
     let slab_ray = SlabRay::new(ray);
     let mut closest = Closest::none(range.max);
@@ -124,8 +112,7 @@ pub fn closest_sphere(nodes: &[BvhNode], spheres: &[Sphere], ray: Ray, range: Ra
         let node = nodes[index as usize];
 
         if node.sphere != 0 {
-            // Leaf: the sphere test is about as cheap as its box test, so skip the box. A leaf's
-            // subtree is just itself, so the next node is always `index + 1`.
+            // Leaf, the sphere test is as cheap as the box test
             let sphere_index = node.sphere - 1;
             let distance = spheres[sphere_index as usize]
                 .intersect_distance(ray, Range::new(range.min, closest.distance));

@@ -16,8 +16,7 @@ spirv-std = "0.10.0"
 
 # math
 bytemuck = { version = "1.25", features = ["derive"] }
-# Must be the glam that spirv-std re-exports (spirv-std 0.10 -> glam 0.33), so only one version
-# ends up in the graph. spirv-std adds `std` on the host and `libm` on the SPIR-V target.
+# Must match the glam spirv-std re-exports (spirv-std 0.10 -> glam 0.33)
 glam = { version = "0.33", default-features = false, features = ["bytemuck", "u32"] }
 
 # host
