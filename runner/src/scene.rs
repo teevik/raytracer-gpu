@@ -3,35 +3,32 @@ use rand::{Rng, RngExt};
 use shader::{Material, Sphere};
 
 pub fn scene(rng: &mut impl Rng) -> Vec<Sphere> {
-    let mut spheres = Vec::new();
-
-    // Ground
-    spheres.push(Sphere {
-        center: Vec3::new(0., -1000., 0.),
-        radius: 1000.,
-        material: Material::diffuse(Vec3::new(0.5, 0.5, 0.5)),
-    });
-
-    // Center sphere
-    spheres.push(Sphere {
-        center: Vec3::new(0., 1., 0.),
-        radius: 1.,
-        material: Material::glass(1.5),
-    });
-
-    // Left sphere
-    spheres.push(Sphere {
-        center: Vec3::new(-4., 1., 0.),
-        radius: 1.,
-        material: Material::diffuse(Vec3::new(0.4, 0.2, 0.1)),
-    });
-
-    // Right sphere
-    spheres.push(Sphere {
-        center: Vec3::new(4., 1., 0.),
-        radius: 1.,
-        material: Material::metal(Vec3::new(0.7, 0.6, 0.5), 0.),
-    });
+    let mut spheres = vec![
+        // Ground
+        Sphere {
+            center: Vec3::new(0., -1000., 0.),
+            radius: 1000.,
+            material: Material::diffuse(Vec3::new(0.5, 0.5, 0.5)),
+        },
+        // Center sphere
+        Sphere {
+            center: Vec3::new(0., 1., 0.),
+            radius: 1.,
+            material: Material::glass(1.5),
+        },
+        // Left sphere
+        Sphere {
+            center: Vec3::new(-4., 1., 0.),
+            radius: 1.,
+            material: Material::diffuse(Vec3::new(0.4, 0.2, 0.1)),
+        },
+        // Right sphere
+        Sphere {
+            center: Vec3::new(4., 1., 0.),
+            radius: 1.,
+            material: Material::metal(Vec3::new(0.7, 0.6, 0.5), 0.),
+        },
+    ];
 
     for a in -11..11 {
         for b in -11..11 {
