@@ -3,17 +3,23 @@ mod scene;
 
 use bvh::build_bvh;
 use bytemuck::Zeroable;
+use clap::{builder::BoolishValueParser, ArgAction, Parser};
 use glam::{UVec2, Vec3, Vec4};
-use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
+use indicatif::{ProgressBar, ProgressStyle};
+use rand::{rngs::StdRng, Rng, RngExt, SeedableRng};
 use scene::scene;
 use shader::{BvhNode, DispatchParams, RaytraceSettings, Sphere, UVec3, Viewport};
-use std::{fs::File, io::BufWriter, mem::size_of, num::NonZero, sync::mpsc, time::Instant};
+use std::{
+    fs::File, io::BufWriter, mem::size_of, num::NonZero, path::PathBuf, str::FromStr, sync::mpsc,
+    time::Instant,
+};
 use wgpu::{
+    include_spirv,
+    util::{BufferInitDescriptor, DeviceExt},
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingResource, BindingType, BufferBinding, BufferBindingType, BufferDescriptor, BufferUsages,
     ComputePipelineDescriptor, DeviceDescriptor, ExperimentalFeatures, Features, Instance,
-    InstanceDescriptor, MapMode, PipelineLayoutDescriptor, PollType, ShaderStages, include_spirv,
-    util::{BufferInitDescriptor, DeviceExt},
+    InstanceDescriptor, MapMode, PipelineLayoutDescriptor, PollType, ShaderStages,
 };
 
 pub struct Camera {
@@ -67,36 +73,66 @@ fn calculate_viewport(camera: Camera, screen_size: UVec2) -> Viewport {
     }
 }
 
-fn make_rng() -> Box<dyn Rng> {
-    let seed = std::env::var("SEED").unwrap_or_else(|_| "1".to_string());
+#[derive(Parser)]
+struct Args {
+    /// Samples per pixel
+    #[arg(long, env = "SAMPLES", default_value_t = 1000)]
+    samples: u32,
 
-    if seed == "random" {
-        return Box::new(rand::rng());
-    }
+    /// Seed for the scene and the shader's RNG: a u64, or "random"
+    #[arg(long, env = "SEED", default_value = "1")]
+    seed: Seed,
 
-    let seed: u64 = seed
-        .parse()
-        .unwrap_or_else(|_| panic!("SEED must be a u64 or \"random\", got {seed:?}"));
-    Box::new(StdRng::seed_from_u64(seed))
+    /// Intersect through the BVH instead of testing every sphere
+    #[arg(
+        long,
+        env = "BVH",
+        default_value_t = true,
+        action = ArgAction::Set,
+        value_parser = BoolishValueParser::new(),
+    )]
+    bvh: bool,
+
+    /// Where to write the rendered image
+    #[arg(short, long, env = "OUTPUT", default_value = "render.png")]
+    output: PathBuf,
 }
 
-/// Reads an optional env var, falling back to `default` when unset
-fn env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
-    match std::env::var(name) {
-        Ok(value) => value
-            .parse()
-            .unwrap_or_else(|_| panic!("{name} has an invalid value: {value:?}")),
-        Err(_) => default,
+#[derive(Clone, Copy)]
+enum Seed {
+    Fixed(u64),
+    Random,
+}
+
+impl FromStr for Seed {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "random" {
+            return Ok(Seed::Random);
+        }
+
+        s.parse()
+            .map(Seed::Fixed)
+            .map_err(|_| format!("expected a u64 or \"random\", got {s:?}"))
     }
 }
 
-/// Samples traced per pixel by one dispatch. All dispatches go into a single submission, so this
-/// doesn't change submit/sync overhead; it trades two GPU-side costs. Small chunks pay a barrier
+fn make_rng(seed: Seed) -> Box<dyn Rng> {
+    match seed {
+        Seed::Fixed(seed) => Box::new(StdRng::seed_from_u64(seed)),
+        Seed::Random => Box::new(rand::rng()),
+    }
+}
+
+/// Samples traced per pixel by one dispatch. Every dispatch is queued before the CPU waits, so this
+/// doesn't add CPU/GPU syncs; it trades two GPU-side costs. Small chunks pay a barrier, a submission
 /// and an `output` read-modify-write per dispatch, while large chunks leave the GPU waiting on the
 /// slowest (e.g. glass-heavy) workgroups at the end of each long dispatch. On an RTX 4090, 8-16 was
-/// fastest, 1 was ~15% slower and 64 ~10% slower. It also bounds how long one dispatch runs
-/// (~6 ms here), keeping slow GPUs far from driver watchdogs (TDR, ~2 s on Windows). The float
-/// summation order depends on it, so changing it changes the image at noise level.
+/// fastest, 1 was ~15% slower and 64 ~10% slower (measured with all dispatches in one submission).
+/// It also bounds how long one dispatch runs (~6 ms here), keeping slow GPUs far from driver
+/// watchdogs (TDR, ~2 s on Windows), and sets the progress bar's granularity. The float summation
+/// order depends on it, so changing it changes the image at noise level.
 const SAMPLES_PER_DISPATCH: u32 = 16;
 
 /// Splits `amount_of_samples` into the per-dispatch parameters, in order.
@@ -145,6 +181,7 @@ fn render_cpu(
 #[pollster::main]
 async fn main() {
     env_logger::init();
+    let args = Args::parse();
 
     let shader = include_spirv!(env!("SHADER_SPV_PATH"));
 
@@ -161,9 +198,9 @@ async fn main() {
     let screen_size = UVec2::new(800, 400);
     let viewport = calculate_viewport(camera, screen_size);
 
-    let amount_of_samples: u32 = env_or("SAMPLES", 1000);
+    let amount_of_samples = args.samples;
     let max_depth = 50;
-    let use_bvh = env_or::<u32>("BVH", 1) != 0;
+    let use_bvh = args.bvh;
 
     let raytrace_settings = RaytraceSettings {
         viewport,
@@ -174,7 +211,7 @@ async fn main() {
         ..Zeroable::zeroed()
     };
 
-    let mut rng = make_rng();
+    let mut rng = make_rng(args.seed);
     let spheres = scene(&mut rng);
     let bvh_nodes = build_bvh(&spheres);
     // Base seed for the shader's RNG; every sample's RNG is derived from it.
@@ -374,25 +411,44 @@ async fn main() {
         dispatches.len()
     );
 
-    // All dispatches go into one compute pass and one submission, and the CPU waits only once.
-    // Each dispatch reads and adds to `output`; wgpu inserts a storage barrier between dispatches
-    // that write the same buffer, so they accumulate in order.
+    let progress = ProgressBar::new(amount_of_samples as u64).with_style(
+        ProgressStyle::with_template("{bar:40} {pos}/{len} samples [{elapsed_precise}, eta {eta}]")
+            .unwrap(),
+    );
+
+    // Each dispatch gets its own submission, and all of them are queued before the CPU waits, so
+    // the GPU never idles between dispatches. Waiting on each submission in order then advances
+    // the progress bar as dispatches finish. Each dispatch reads and adds to `output`; wgpu inserts
+    // a storage barrier between dispatches that write the same buffer, so they accumulate in order.
     let time_started = Instant::now();
-    let mut encoder = device.create_command_encoder(&Default::default());
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&Default::default());
-        compute_pass.set_pipeline(&compute_pipeline);
-        for i in 0..dispatches.len() as u32 {
-            compute_pass.set_bind_group(0, &bind_group, &[i * params_stride]);
-            compute_pass.dispatch_workgroups(
-                screen_size.x.div_ceil(8),
-                screen_size.y.div_ceil(8),
-                1,
-            );
-        }
+    let submissions: Vec<_> = (0..)
+        .zip(&dispatches)
+        .map(|(i, params): (u32, _)| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut compute_pass = encoder.begin_compute_pass(&Default::default());
+                compute_pass.set_pipeline(&compute_pipeline);
+                compute_pass.set_bind_group(0, &bind_group, &[i * params_stride]);
+                compute_pass.dispatch_workgroups(
+                    screen_size.x.div_ceil(8),
+                    screen_size.y.div_ceil(8),
+                    1,
+                );
+            }
+            (queue.submit([encoder.finish()]), params.sample_count)
+        })
+        .collect();
+
+    for (submission, sample_count) in submissions {
+        device
+            .poll(PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .unwrap();
+        progress.inc(sample_count as u64);
     }
-    queue.submit([encoder.finish()]);
-    device.poll(PollType::wait_indefinitely()).unwrap();
+    progress.finish_and_clear();
 
     let elapsed_time = time_started.elapsed().as_secs_f32();
     eprintln!("Elapsed time: {elapsed_time:.3}");
@@ -425,7 +481,7 @@ async fn main() {
         .map(|c| f32::round(c.clamp(0., 1.).sqrt() * 255.) as u8)
         .collect();
 
-    let file = BufWriter::new(File::create("render.png").unwrap());
+    let file = BufWriter::new(File::create(&args.output).unwrap());
     let mut encoder = png::Encoder::new(file, screen_size.x, screen_size.y);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
