@@ -187,6 +187,7 @@ fn trace_sample(
     let ray = Ray {
         origin: ray_origin,
         direction: ray_direction,
+        time: rand.gen_float(),
     };
 
     ray_color(

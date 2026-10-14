@@ -14,15 +14,6 @@ pub struct Aabb {
     pub max: Vec3,
 }
 
-impl Aabb {
-    pub fn from_extremes(a: Vec3, b: Vec3) -> Self {
-        Self {
-            min: a.min(b),
-            max: a.max(b),
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct SlabRay {
     pub origin: Vec3,

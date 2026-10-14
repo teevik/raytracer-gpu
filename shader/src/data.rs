@@ -72,7 +72,7 @@ impl Closest {
     }
 }
 
-// naga sees `Ray` as 32 bytes (Rust: 24), so it has to stay the last member or naga
+// naga sees `Ray` as 32 bytes (Rust: 28), so it has to stay the last member or naga
 // rejects the overlapping offsets
 #[derive(Clone, Copy, Default)]
 #[repr(C)]

@@ -5,29 +5,25 @@ use shader::{Material, Sphere};
 pub fn scene(rng: &mut impl Rng) -> Vec<Sphere> {
     let mut spheres = vec![
         // Ground
-        Sphere {
-            center: Vec3::new(0., -1000., 0.),
-            radius: 1000.,
-            material: Material::diffuse(Vec3::new(0.5, 0.5, 0.5)),
-        },
+        Sphere::stationary(
+            Vec3::new(0., -1000., 0.),
+            1000.,
+            Material::diffuse(Vec3::new(0.5, 0.5, 0.5)),
+        ),
         // Center sphere
-        Sphere {
-            center: Vec3::new(0., 1., 0.),
-            radius: 1.,
-            material: Material::glass(1.5),
-        },
+        Sphere::stationary(Vec3::new(0., 1., 0.), 1., Material::glass(1.5)),
         // Left sphere
-        Sphere {
-            center: Vec3::new(-4., 1., 0.),
-            radius: 1.,
-            material: Material::diffuse(Vec3::new(0.4, 0.2, 0.1)),
-        },
+        Sphere::stationary(
+            Vec3::new(-4., 1., 0.),
+            1.,
+            Material::diffuse(Vec3::new(0.4, 0.2, 0.1)),
+        ),
         // Right sphere
-        Sphere {
-            center: Vec3::new(4., 1., 0.),
-            radius: 1.,
-            material: Material::metal(Vec3::new(0.7, 0.6, 0.5), 0.),
-        },
+        Sphere::stationary(
+            Vec3::new(4., 1., 0.),
+            1.,
+            Material::metal(Vec3::new(0.7, 0.6, 0.5), 0.),
+        ),
     ];
 
     for a in -11..11 {
@@ -51,28 +47,23 @@ pub fn scene(rng: &mut impl Rng) -> Vec<Sphere> {
                         random() * random(),
                     );
 
-                    spheres.push(Sphere {
-                        center,
-                        radius: 0.2,
-                        material: Material::diffuse(albedo),
-                    });
+                    // Bounces upwards while the shutter is open
+                    let end = center + Vec3::new(0., rng.random_range(0. ..0.5), 0.);
+
+                    spheres.push(Sphere::moving(center, end, 0.2, Material::diffuse(albedo)));
                 } else if choose_material < 0.95 {
                     // Metal
                     let mut random = || rng.random_range(0.5..1.);
                     let albedo = Vec3::new(random(), random(), random());
                     let fuzz = rng.random_range(0. ..0.5);
 
-                    spheres.push(Sphere {
+                    spheres.push(Sphere::stationary(
                         center,
-                        radius: 0.2,
-                        material: Material::metal(albedo, fuzz),
-                    });
+                        0.2,
+                        Material::metal(albedo, fuzz),
+                    ));
                 } else {
-                    spheres.push(Sphere {
-                        center,
-                        radius: 0.2,
-                        material: Material::glass(1.5),
-                    });
+                    spheres.push(Sphere::stationary(center, 0.2, Material::glass(1.5)));
                 }
             }
         }

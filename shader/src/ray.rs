@@ -6,6 +6,8 @@ use crate::data::Face;
 pub struct Ray {
     pub origin: Vec3,
     pub direction: Vec3,
+    /// When the ray was cast, from 0 (shutter open) to 1 (shutter close)
+    pub time: f32,
 }
 
 impl Ray {

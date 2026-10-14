@@ -61,7 +61,7 @@ impl Material {
 
     pub fn scatter(self, ray: Ray, ray_hit: RayHit, rand: &mut Rand) -> ScatterResult {
         match self.reflection {
-            Reflection::Diffuse => scatter_diffuse(self.albedo, ray_hit, rand),
+            Reflection::Diffuse => scatter_diffuse(self.albedo, ray, ray_hit, rand),
             Reflection::Metal => scatter_metal(self.albedo, self.fuzz, ray, ray_hit, rand),
             Reflection::Glass => scatter_glass(self.refraction_index, ray, ray_hit, rand),
         }
@@ -81,7 +81,7 @@ fn reflectance(cosine: f32, refraction_ratio: f32) -> f32 {
     r0 + (1. - r0) * Float::powi(1. - cosine, 5)
 }
 
-fn scatter_diffuse(albedo: Vec3, ray_hit: RayHit, rand: &mut Rand) -> ScatterResult {
+fn scatter_diffuse(albedo: Vec3, ray: Ray, ray_hit: RayHit, rand: &mut Rand) -> ScatterResult {
     let mut scatter_direction = ray_hit.normal + rand.gen_unit_vector();
 
     // Catch degenerate scatter direction
@@ -92,6 +92,7 @@ fn scatter_diffuse(albedo: Vec3, ray_hit: RayHit, rand: &mut Rand) -> ScatterRes
     let scattered = Ray {
         origin: ray_hit.point,
         direction: scatter_direction,
+        time: ray.time,
     };
     let attenuation = albedo;
 
@@ -114,6 +115,7 @@ pub fn scatter_metal(
     let scattered = Ray {
         origin: ray_hit.point,
         direction: reflected + rand.gen_unit_vector() * fuzz,
+        time: ray.time,
     };
     let attenuation = albedo;
 
@@ -155,6 +157,7 @@ pub fn scatter_glass(
     let scattered = Ray {
         origin: ray_hit.point,
         direction,
+        time: ray.time,
     };
     let attenuation = Vec3::ONE;
 
