@@ -202,12 +202,11 @@ fn trace_sample(
 #[spirv(compute(threads(8, 8)))]
 pub fn main(
     #[spirv(global_invocation_id)] pixel_position: UVec3,
-    #[spirv(uniform, descriptor_set = 0, binding = 0)] dispatch_params: &DispatchParams,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] raytrace_settings: &RaytraceSettings,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] spheres: &[Sphere],
-    // `Vec4` to match the 16-byte std430 stride, `w` is unused
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] output: &mut [Vec4],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] bvh_nodes: &[BvhNode],
+    #[spirv(push_constant)] dispatch_params: &DispatchParams,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] raytrace_settings: &RaytraceSettings,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] spheres: &[Sphere],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] output: &mut [Vec4],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] bvh_nodes: &[BvhNode],
 ) {
     let pixel_position = pixel_position.truncate();
     let screen_size = raytrace_settings.screen_size;

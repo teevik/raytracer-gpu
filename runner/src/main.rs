@@ -10,12 +10,12 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use scene::scene;
 use shader::{BvhNode, DispatchParams, RaytraceSettings, Sphere, UVec3, Viewport};
-use std::{mem::size_of, num::NonZero, path::PathBuf, str::FromStr, sync::mpsc, time::Instant};
+use std::{mem::size_of, path::PathBuf, str::FromStr, sync::mpsc, time::Instant};
 use wgpu::{
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
-    BindingResource, BindingType, BufferBinding, BufferBindingType, BufferDescriptor, BufferUsages,
-    ComputePipelineDescriptor, DeviceDescriptor, ExperimentalFeatures, Features, Instance,
-    InstanceDescriptor, MapMode, PipelineLayoutDescriptor, PollType, ShaderStages, include_spirv,
+    BindingType, BufferBindingType, BufferDescriptor, BufferUsages, ComputePipelineDescriptor,
+    DeviceDescriptor, ExperimentalFeatures, Features, Instance, InstanceDescriptor, Limits,
+    MapMode, PipelineLayoutDescriptor, PollType, ShaderStages, include_spirv,
     util::{BufferInitDescriptor, DeviceExt},
 };
 
@@ -228,8 +228,11 @@ async fn main() {
     let (device, queue) = adapter
         .request_device(&DeviceDescriptor {
             label: Some("Device"),
-            required_features: Features::empty(),
-            required_limits: Default::default(),
+            required_features: Features::IMMEDIATES,
+            required_limits: Limits {
+                max_immediate_size: size_of::<DispatchParams>() as u32,
+                ..Default::default()
+            },
             experimental_features: ExperimentalFeatures::disabled(),
             memory_hints: Default::default(),
             trace: Default::default(),
@@ -240,22 +243,8 @@ async fn main() {
     let compute_shader_module = device.create_shader_module(shader);
 
     // Data
-    // One aligned `DispatchParams` per dispatch, selected with a dynamic offset
+    // One `DispatchParams` per dispatch, passed as immediates
     let dispatches: Vec<DispatchParams> = dispatch_params(seed, amount_of_samples).collect();
-    let params_stride = (size_of::<DispatchParams>() as u32)
-        .next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
-    let mut params_bytes = vec![0u8; dispatches.len().max(1) * params_stride as usize];
-    for (params, chunk) in dispatches
-        .iter()
-        .zip(params_bytes.chunks_exact_mut(params_stride as usize))
-    {
-        chunk[..size_of::<DispatchParams>()].copy_from_slice(bytemuck::bytes_of(params));
-    }
-    let params_buffer = device.create_buffer_init(&BufferInitDescriptor {
-        label: Some("Dispatch params buffer"),
-        contents: &params_bytes,
-        usage: BufferUsages::UNIFORM,
-    });
 
     let raytrace_settings_buffer = device.create_buffer_init(&BufferInitDescriptor {
         label: Some("Raytrace settings buffer"),
@@ -297,9 +286,9 @@ async fn main() {
                 binding: 0,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: NonZero::new(size_of::<DispatchParams>() as u64),
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
                 count: None,
             },
@@ -317,16 +306,6 @@ async fn main() {
                 binding: 2,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 3,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
                     has_dynamic_offset: false,
                     min_binding_size: None,
@@ -334,7 +313,7 @@ async fn main() {
                 count: None,
             },
             BindGroupLayoutEntry {
-                binding: 4,
+                binding: 3,
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: true },
@@ -349,7 +328,7 @@ async fn main() {
     let compute_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Compute pipeline layout"),
         bind_group_layouts: &[Some(&bind_group_layout)],
-        immediate_size: 0,
+        immediate_size: size_of::<DispatchParams>() as u32,
     });
 
     let compute_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -367,26 +346,18 @@ async fn main() {
         entries: &[
             BindGroupEntry {
                 binding: 0,
-                resource: BindingResource::Buffer(BufferBinding {
-                    buffer: &params_buffer,
-                    offset: 0,
-                    size: NonZero::new(size_of::<DispatchParams>() as u64),
-                }),
-            },
-            BindGroupEntry {
-                binding: 1,
                 resource: raytrace_settings_buffer.as_entire_binding(),
             },
             BindGroupEntry {
-                binding: 2,
+                binding: 1,
                 resource: sphere_buffer.as_entire_binding(),
             },
             BindGroupEntry {
-                binding: 3,
+                binding: 2,
                 resource: output_buffer.as_entire_binding(),
             },
             BindGroupEntry {
-                binding: 4,
+                binding: 3,
                 resource: bvh_node_buffer.as_entire_binding(),
             },
         ],
@@ -404,14 +375,15 @@ async fn main() {
 
     // Queue every dispatch up front, then wait on each in turn to drive the progress bar
     let time_started = Instant::now();
-    let submissions: Vec<_> = (0..)
-        .zip(&dispatches)
-        .map(|(i, params): (u32, _)| {
+    let submissions: Vec<_> = dispatches
+        .iter()
+        .map(|params| {
             let mut encoder = device.create_command_encoder(&Default::default());
             {
                 let mut compute_pass = encoder.begin_compute_pass(&Default::default());
                 compute_pass.set_pipeline(&compute_pipeline);
-                compute_pass.set_bind_group(0, &bind_group, &[i * params_stride]);
+                compute_pass.set_bind_group(0, &bind_group, &[]);
+                compute_pass.set_immediates(0, bytemuck::bytes_of(params));
                 compute_pass.dispatch_workgroups(
                     screen_size.x.div_ceil(8),
                     screen_size.y.div_ceil(8),
